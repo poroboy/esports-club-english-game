@@ -198,9 +198,14 @@ Rules:
 
 Liquipedia gives facts but no skill ratings. The game estimates each player's level from context: role, age, league tier, team results, playoff and international placings, years as a professional, roster stability, transfer history. A player with little data gets a default by league tier. Ratings are the game's estimate, not a fact about the real player.
 
-- Scale 1 to 100.
+- Scale 1 to 99.
 - Attributes **[TRIAL]**: mechanics, laning, teamfighting, game knowledge, consistency; plus age and a hidden potential for young players.
-- The rating rules are a Stage 1b task and need a careful design because every later system depends on them. **[OPEN]**
+- Rules v0.1 (Stage 1b, approved 2026-10-11) **[TRIAL]**. Full text: `docs/rating-rules-draft.md`. Code: `build_ratings.py`; output: `data/ratings.json` (new file, separate from the snapshot, which stays facts only). The same snapshot always gives the same ratings.
+  - overall = league base (LCK and LPL 72, LEC 67, LCS and LCP 62, LCK CL 57, LDL 55, LFL 51, NACL 47, LJL 45) + experience (+1 per year in the data, max +4) + international play (round(4.5 x sqrt(appearances at Worlds, MSI, First Stand 2022 to 2026))) - 5 for a sub - age adjustment (1 per year over 29; 2 under 19) + results (0 for now).
+  - Attributes = overall + role tilt + age and experience tilt + a fixed per-player spread of -3 to +3 (a hash of the player id), shifted so their average equals overall.
+  - Hidden potential for players aged 22 or less: overall + growth by age (+18 at 17 down to +3 at 22) + a spread of 0 to 4, max 95. Unknown age: overall + 3.
+  - Every rating has a `why` breakdown so the game can explain it.
+- Known limits: without placements the best players tie (9 players at 90); LDL has no birth dates; the experience term only sees the years since 2022. The **results** term and the real `debutYear` wait for LiquipediaDB data (needs the user's API key).
 
 ### Invented parts
 
@@ -298,7 +303,7 @@ Academy, stocks, aging and retirement, rival personalities, end-of-season rankin
 ## Open questions
 
 1. Exact second-tier league of each region, and the real size of the data snapshot (Stage 1a).
-2. Player rating rules (Stage 1b).
+2. ~~Player rating rules (Stage 1b).~~ Done as v0.1 on 2026-10-11 (see "Player ratings"); the results term waits for LiquipediaDB data and the rules are reviewed with the **[TRIAL]** items.
 3. Final check-response shape, including the shotcalling round, and how the harder-structure rule is tested (Stage 2).
 4. Season format of each league (Stage 3).
 5. Exact minimum length of an answer in each long scene (Stage 4).

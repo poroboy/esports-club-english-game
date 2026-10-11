@@ -3,7 +3,8 @@
 
 Reads cache/pages only and sends no requests. Writes data/snapshot.json.
 Decisions agreed for Stage 1a (2026-10-11):
-  - placements and honors are not in the wikitext; they stay null / [] until LiquipediaDB is used
+  - placements are not in the wikitext; they stay null until LiquipediaDB is used
+  - honors: one entry per Worlds / MSI / First Stand roster appearance, placement null (Stage 1b decision)
   - tag: Liquipedia abbreviation or null; parentTeamId: null; debutYear: null
   - joinedTeam: start date of the first season of the player's current, unbroken stint in our data
     (2022 onwards, so a player who joined before 2022 gets a date that is too late)
@@ -171,6 +172,7 @@ def main():
     # ---- player appearances over all seasons (for teamHistory and joinedTeam)
     # sort key: season start, then "former" before current (a player traded mid-season left that team first)
     appearances = defaultdict(list)  # player page -> [(sdate, edate, order, team name, team id)]
+    honors = defaultdict(list)  # player page -> international events played (Worlds, MSI, First Stand)
     for s in seasons:
         edate = min(s["edate"] or s["sdate"], SNAPSHOT_DATE)  # a running season ends "now"
         for row in s["rosters"]:
@@ -179,6 +181,11 @@ def main():
             for p in row["players"]:
                 order = 0 if p["status"] == "former" else 1
                 appearances[normalize_title(p["page"])].append((s["sdate"], edate, order, tname, tid))
+                if s["international"] and p["status"] != "former":
+                    event, year = s["page"].rsplit("/", 1)
+                    honors[normalize_title(p["page"])].append(
+                        {"event": f"{event} {year}", "year": int(year), "placement": None,
+                         "eventTier": "international"})  # appearance only; placement waits for LiquipediaDB
 
     # ---- current players: one team each (newest roster first, then starter before sub, then higher league)
     chosen = {}
@@ -219,7 +226,7 @@ def main():
             "role": role, "teamId": tid, "status": p["status"],
             "joinedTeam": joined, "debutYear": None,
             "teamHistory": [{k: v for k, v in s.items() if not k.startswith("_")} for s in stints],
-            "honors": [],
+            "honors": sorted(honors.get(key, []), key=lambda h: (-h["year"], h["event"])),
             "page": pd["title"] if pd else p["page"],
         })
 
