@@ -12,6 +12,7 @@ window.__ECG_TEST = true;
       scores,
       corrected: text.replace(/\bwas\b/, 'were').replace(/\blose\b/, 'lost'),
       meaning: 'This is a stub reply for the local preview.',
+      upgrades: words.length > 2 ? [{ original: words.slice(0, 2).join(' '), better: 'a stronger way to say it (stub)', level: 'B2', why: 'Stub note: more formal than the plain wording.' }] : [],
       issues: words.length > 2 ? [{ span: words.slice(0, 2).join(' '), fix: words.slice(0, 2).join(' ') + ' (fixed)', reason: 'Stub reason: check the tense here.' }] : []
     };
   }
@@ -19,7 +20,7 @@ window.__ECG_TEST = true;
   sample.json = async function (prompt) {
     await wait(600);
     if (prompt.indexOf('Translate into natural') === 0) {
-      return [1, 2, 3].map(n => ({ meaningTh: 'ข้อความไทยตัวอย่าง ' + n, reasonsTh: ['เหตุผลตัวอย่าง'] }));
+      return [1, 2, 3].map(n => ({ meaningTh: 'ข้อความไทยตัวอย่าง ' + n, reasonsTh: ['เหตุผลตัวอย่าง'], upgradesTh: ['บันทึกตัวอย่าง'] }));
     }
     const q = quoted(prompt);
     if (prompt.indexOf('check each answer on its own') > 0) {

@@ -126,6 +126,7 @@ After every answer the player sees:
 4. A short reason for each mistake.
 5. The dimension scores and the effect on the club.
 6. One suited chunk (see Chunks).
+7. **Level up** (added 2026-10-11 after the play test): 1 to 3 more advanced ways to say wording that is correct but plain (0 or 1 per shotcalling call), each with a level (B2 or C1) and a short note. It is not scored and never lowers a score. The Thai help button translates the notes too.
 
 Language **[TRIAL]**: the meaning and the reasons are in English at about CEFR B1. A Thai help button shows the Thai version only when the player presses it, as in the TOEIC app. The Thai text is requested on demand (a separate request), so the normal feedback stays fast and uses less of the player's Claude usage.
 
@@ -149,7 +150,7 @@ Proposed response shape (final shape **[OPEN]**, decided in Stage 2; Claude retu
 }
 ```
 
-Answers to several questions of one scene (the press conference, 2 questions) use the shotcalling shape with the five long-scene scores: `{ "results": [ { "n": 1, "scores": {...5...}, "corrected", "meaning", "issues": [...] }, { "n": 2, ... } ], "chunk": "..." }`. A single answer keeps the shape above (Stage 4, approved 2026-10-11).
+Answers to several questions of one scene (the press conference, 2 questions) use the shotcalling shape with the five long-scene scores: `{ "results": [ { "n": 1, "scores": {...5...}, "corrected", "meaning", "issues": [...] }, { "n": 2, ... } ], "chunk": "..." }`. A single answer keeps the shape above (Stage 4, approved 2026-10-11). Since 2026-10-11 (approved by the user) every answer, in every shape, also holds `"upgrades": [ { "original": "...", "better": "...", "level": "B2" | "C1", "why": "..." } ]` (1 to 3 per answer, 0 or 1 per shotcalling call, `[]` when the wording is already strong). The check rules also say: `span` and `fix` must look different (a punctuation fix includes the neighbouring word), `corrected` must follow the listed issues, and the word must suit the situation ("opponent", not "enemy", outside shotcalling).
 
 Failure handling: a check that fails or is refused shows a short message, is not retried automatically, and costs the player nothing.
 
