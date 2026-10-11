@@ -1,0 +1,4 @@
+{
+  "note": "Pilot: two team pages and one league page. Titles are guesses; the script reports any page it cannot find.",
+  "titles": ["T1", "Gen.G", "LCK"]
+}

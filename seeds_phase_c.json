@@ -1,0 +1,56 @@
+{
+  "note": "Phase C: top-level season pages 2022-2026 (titles confirmed by list=allpages on 2026-10-11). Used for rosters, team history and placements. PCS/VCS 2022-2024 only for history of LCP teams.",
+  "titles": [
+    "LCK/2022/Spring", "LCK/2022/Summer", "LCK/2023/Spring", "LCK/2023/Summer",
+    "LCK/2024/Spring", "LCK/2024/Summer", "LCK/2025", "LCK/2026",
+
+    "LCK CL/2022/Spring", "LCK CL/2022/Summer", "LCK CL/2023/Spring", "LCK CL/2023/Summer",
+    "LCK CL/2024/Spring", "LCK CL/2024/Summer", "LCK CL/2025", "LCK CL/2026",
+
+    "LPL/2022/Spring", "LPL/2022/Summer", "LPL/2023/Spring", "LPL/2023/Summer",
+    "LPL/2024/Spring", "LPL/2024/Summer", "LPL/2025/Split 1", "LPL/2025/Split 2",
+    "LPL/2025/Split 3", "LPL/2026/Split 1", "LPL/2026/Split 2", "LPL/2026/Split 3",
+
+    "LDL/2022/Spring", "LDL/2022/Summer", "LDL/2023", "LDL/2024/Stage 1",
+    "LDL/2024/Stage 2", "LDL/2024/Stage 3", "LDL/2024/Season Finals", "LDL/2025/Split 1",
+    "LDL/2025/Split 2/Stage 1", "LDL/2025/Split 2/Stage 2", "LDL/2025/Split 3",
+
+    "LEC/2022/Spring", "LEC/2022/Summer", "LEC/2023/Winter", "LEC/2023/Spring",
+    "LEC/2023/Summer", "LEC/2024/Winter", "LEC/2024/Spring", "LEC/2024/Summer",
+    "LEC/2025/Winter", "LEC/2025/Spring", "LEC/2025/Summer", "LEC/2026/Winter",
+    "LEC/2026/Versus", "LEC/2026/Spring", "LEC/2026/Summer",
+
+    "LFL/2022/Spring", "LFL/2022/Summer", "LFL/2023/Spring", "LFL/2023/Summer",
+    "LFL/2024/Spring", "LFL/2024/Summer", "LFL/2025/Winter", "LFL/2025/Spring",
+    "LFL/2025/Summer", "LFL/2026/Winter", "LFL/2026/Spring", "LFL/2026/Summer",
+
+    "LCS/2022/Spring", "LCS/2022/Summer", "LCS/2023/Spring", "LCS/2023/Summer",
+    "LCS/2024/Spring", "LCS/2024/Summer", "LTA/2025/Split 1/North", "LTA/2025/Split 2/North",
+    "LTA/2025/Split 3/North", "LCS/2026/Lock-In", "LCS/2026/Spring", "LCS/2026/Summer",
+
+    "North American Challengers League/2023/Spring", "North American Challengers League/2023/Summer",
+    "North American Challengers League/2024/Spring", "North American Challengers League/2024/Summer",
+    "North American Challengers League/2025/Split 1", "North American Challengers League/2025/Split 2",
+    "North American Challengers League/2025/Spring", "North American Challengers League/2026/Split 1",
+    "North American Challengers League/2026/Spring", "North American Challengers League/2026/Summer",
+
+    "LCP/2025/Split 1", "LCP/2025/Split 2", "LCP/2025/Split 3", "LCP/2025/Season Finals",
+    "LCP/2026/Split 1", "LCP/2026/Split 2", "LCP/2026/Split 3", "LCP/2026/Season Finals",
+
+    "LJL/2022/Spring", "LJL/2022/Summer", "LJL/2023/Spring", "LJL/2023/Summer",
+    "LJL/2024/Spring", "LJL/2024/Summer", "LJL/2025/Ignite", "LJL/2025/Forge",
+    "LJL/2025/Storm", "LJL/2025/Finals", "LJL/2026/Winter Series", "LJL/2026/Spring Series",
+    "LJL/2026/Summer Championship",
+
+    "PCS/2022/Spring", "PCS/2022/Summer", "PCS/2023/Spring", "PCS/2023/Summer",
+    "PCS/2024/Spring", "PCS/2024/Summer",
+    "VCS/2022/Spring", "VCS/2022/Summer", "VCS/2023/Spring", "VCS/2023/Dusk",
+    "VCS/2024/Spring", "VCS/2024/Summer",
+
+    "World Championship/2022", "World Championship/2023", "World Championship/2024",
+    "World Championship/2025", "World Championship/2026",
+    "Mid-Season Invitational/2022", "Mid-Season Invitational/2023", "Mid-Season Invitational/2024",
+    "Mid-Season Invitational/2025", "Mid-Season Invitational/2026",
+    "First Stand Tournament/2025", "First Stand Tournament/2026"
+  ]
+}
