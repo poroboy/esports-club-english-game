@@ -216,11 +216,15 @@ Liquipedia gives facts but no skill ratings. The game estimates each player's le
 
 Formula **[TRIAL]**:
 
-1. Team strength = role-weighted sum of the five starters' ratings.
-2. Modifiers: team chemistry, morale, preparation.
-3. Win probability from the difference between the two teams' strength (smooth curve), plus randomness.
-4. Each league is simplified to one table over a season. **[OPEN: season format, decided in Stage 3]**
+Rules v0.1 (Stage 3, approved 2026-10-11). Full text: `docs/match-rules-draft.md`. Code: `game/template.html` (match engine section).
+
+1. Team strength = role-weighted average of the five starters' overall ratings (top 0.18, jungle 0.22, mid 0.22, bot 0.22, support 0.16), then measured in standard deviations of the team's own league (z), because the second leagues are close together. A role with no player in the data gets a stand-in (league base rating minus 3), shown as "Stand-in"; so all 97 clubs can be chosen.
+2. Modifiers: chemistry and morale of the user's club, each up to +/-0.35 z (0.35 x (value - 50) / 50); preparation is 0 in version 1; reputation does not touch the match. AI clubs stay at 0.
+3. Win probability of one game = 1 / (1 + 10^(-(zA - zB) / 6)). A match is best of 3 games (2-0 or 2-1). The draws come from a seed stored in the save, so a played result never changes on reload.
+4. Season: single round robin per league (one match per club per week; a league with an odd number of teams gives each club one bye week, on which the match day plays the contract scene instead of the press conference). One table, no playoffs in version 1: match wins, then game difference, then club id. Only the user's league is simulated. At the end the game shows the final table and starts the next season (year + 1) with the same teams and ratings; the table resets and club values stay.
 5. Other clubs are AI rivals with simple behaviour in version 1: they play matches and their ratings stay as they are.
+
+Checked on 2026-10-11 (500 simulated seasons per league): the strongest club wins 65 to 80% of its matches, the weakest 21 to 35%, the strongest club takes the title 22 to 67% of the time (more in leagues with one clear favourite, such as NACL, LEC, LCS, LCP). A mid-table club gains about 9 points of match win rate between chemistry/morale 50 and 100.
 
 Language affects the modifiers (chemistry, morale), not the result directly.
 
@@ -305,7 +309,7 @@ Academy, stocks, aging and retirement, rival personalities, end-of-season rankin
 1. Exact second-tier league of each region, and the real size of the data snapshot (Stage 1a).
 2. ~~Player rating rules (Stage 1b).~~ Done as v0.1 on 2026-10-11 (see "Player ratings"); the results term waits for LiquipediaDB data and the rules are reviewed with the **[TRIAL]** items.
 3. Final check-response shape, including the shotcalling round, and how the harder-structure rule is tested (Stage 2).
-4. Season format of each league (Stage 3).
+4. ~~Season format of each league (Stage 3).~~ Done as v0.1 on 2026-10-11 (see "Match simulation"): single round robin, one table, no playoffs.
 5. Exact minimum length of an answer in each long scene (Stage 4).
 6. Whether the Hint button should cost score after version 1 (decide at the two-week review).
 
