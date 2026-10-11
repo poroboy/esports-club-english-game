@@ -1,6 +1,6 @@
 # The three scenes of version 1: draft v0.1 (Stage 4)
 
-Status: **approved 2026-10-11** (all five decisions as proposed) and built in `game/template.html`. A summary is in `esports-club-game-spec.md` ("Version 1 scene rules"). Not yet checked with the real Claude: the two self-tests on the Save screen (scoring rule 2 and the minimum length) must be run in the published game.
+Status: **approved 2026-10-11** (all five decisions as proposed) and built in `game/template.html`. A summary is in `esports-club-game-spec.md` ("Version 1 scene rules"). Checked with the real Claude by the user on 2026-10-11 (game version 6, after the Level up change): the scoring self-test passed (B 66 above A 57; B accuracy 55 below A 95; A 57 above C 40) and the minimum-length test passed (short answer: linking 25, development 15; long answer total 84 against 51). The margin of the first test is thin (9 points), so watch for reports where a complex answer scores below a short correct one.
 
 ## Where we are
 
