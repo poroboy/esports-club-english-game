@@ -180,6 +180,9 @@ footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line);
 a { color: var(--club); }
 @media (max-width: 520px) { .score { grid-template-columns: 96px 1fr 32px; } h2 { font-size: 28px; } .comms { grid-template-columns: 1fr; } .bubble { font-size: 16px; } }
 /* match day, tables */
+.linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.linkbtn:hover { text-decoration: underline; text-decoration-color: var(--club); }
+.linkbtn:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 .board { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; background: linear-gradient(100deg, var(--club-dim), var(--surface) 75%); padding: 20px 22px; }
 .board .side { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .board .side.b { justify-content: flex-end; text-align: right; }
@@ -357,7 +360,7 @@ const newSeed = () => Math.floor(Math.random() * 2147483647) + 1;
 const SEASON_YEAR = +SNAP.meta.snapshotDate.slice(0, 4);
 function newGame(clubId) {
   const seed = newSeed();
-  return { schema: 3, clubId, week: 0, values: { reputation: 50, chemistry: 50, morale: 50 }, flow: { week: 0, longDone: false },
+  return { schema: 4, clubId, week: 0, values: { reputation: 50, chemistry: 50, morale: 50 }, flow: { week: 0, longDone: false },
     season: { year: SEASON_YEAR, seed, results: [] }, seasons: [], contracts: makeContracts(clubId, seed), snapshotDate: SNAP.meta.snapshotDate, updatedAt: Date.now() };
 }
 function upgradeSave(s) {   // schema 1 had only sample results, schema 2 had no contracts: keep club, values and history
@@ -365,7 +368,7 @@ function upgradeSave(s) {   // schema 1 had only sample results, schema 2 had no
     s.week = 0; s.flow = { week: 0, longDone: false }; s.season = { year: SEASON_YEAR, seed: newSeed(), results: [] }; s.seasons = s.seasons || [];
   }
   if (!s.contracts) s.contracts = makeContracts(s.clubId, s.season.seed);
-  s.schema = 3;
+  s.schema = 4;   // 4: the results hold every league, and past seasons keep each league's champion
   return s;
 }
 function persist() { G.updatedAt = Date.now(); return Store.saveGame(G); }
@@ -399,11 +402,21 @@ function roundRobin(ids) {   // circle method; an odd number of teams gives each
 const SCHEDULES = {};
 function scheduleFor(leagueId) { return SCHEDULES[leagueId] || (SCHEDULES[leagueId] = roundRobin(SNAP.teams.filter(t => t.leagueId === leagueId).map(t => t.id))); }
 const seasonWeeks = () => scheduleFor(TEAM[G.clubId].leagueId).length;
+const ALL_LEAGUES = SNAP.leagues.map(l => l.id);
+function simulateRound(leagueId, w) {   // plays the matches of one round that are not in the results yet
+  const round = scheduleFor(leagueId)[w]; if (!round) return;
+  round.forEach(p => {
+    if (G.season.results.some(r => r.w === w && r.a === p[0] && r.b === p[1])) return;
+    const m = playMatch(G.season.seed, w, p[0], p[1]); G.season.results.push({ w, a: p[0], b: p[1], ga: m.ga, gb: m.gb });
+  });
+}
+function ensureLeaguesTo(week) { ALL_LEAGUES.forEach(l => { for (let w = 0; w <= Math.min(week, scheduleFor(l).length - 1); w++) simulateRound(l, w); }); }
+function completeSeason() { ALL_LEAGUES.forEach(l => { for (let w = 0; w < scheduleFor(l).length; w++) simulateRound(l, w); }); }   // leagues with more weeks than yours finish when your season ends
+function catchUpLeagues() { ensureLeaguesTo(G.season.results.some(r => r.w === G.week) ? G.week : G.week - 1); }   // old saves had only your league
 async function ensureWeekPlayed() {
-  const w = G.week;
-  if (G.season.results.some(r => r.w === w)) return;
-  scheduleFor(TEAM[G.clubId].leagueId)[w].forEach(p => { const m = playMatch(G.season.seed, w, p[0], p[1]); G.season.results.push({ w, a: p[0], b: p[1], ga: m.ga, gb: m.gb }); });
-  await persist();
+  const before = G.season.results.length;
+  ensureLeaguesTo(G.week);   // your league at its own week with the club values of today; the other leagues keep pace
+  if (G.season.results.length !== before) await persist();
 }
 function standings(leagueId, results) {
   const rows = {};
@@ -731,13 +744,13 @@ function fixtureBlock() {
   const next = f ? 'Next: vs ' + esc(f.opp.name) + ' <span class="pill">' + diffLabel(f.opp) + '</span>' : 'Bye week · no match';
   return `<div class="label">Match day</div><div class="wk">Week ${G.week + 1}<small class="muted" style="font-size:22px"> / ${total}</small></div><div class="muted small" style="margin:2px 0 10px">${next}</div><button class="btn" data-act="play">${G.flow.longDone && G.flow.week === G.week ? 'Continue week ' + (G.week + 1) : 'Start match day'}</button>`;
 }
-function tableHtml(leagueId, results) {
+function tableHtml(leagueId, results, withStrength) {
   const rows = standings(leagueId, results);
-  return `<div class="scroll"><table class="tbl"><thead><tr><th class="num">#</th><th>Club</th><th class="num">W</th><th class="num">L</th><th class="num">Games</th></tr></thead><tbody>${rows.map((r, i) => `<tr class="${r.id === G.clubId ? 'me' : ''}"><td class="num">${i + 1}</td><td><span class="row" style="gap:8px;flex-wrap:nowrap">${badge(TEAM[r.id], 22)}<span>${esc(TEAM[r.id].name)}</span></span></td><td class="num">${r.w}</td><td class="num">${r.l}</td><td class="num">${r.gw}-${r.gl}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="scroll"><table class="tbl"><thead><tr><th class="num">#</th><th>Club</th><th class="num">W</th><th class="num">L</th><th class="num">Games</th>${withStrength ? '<th class="num">Strength</th>' : ''}</tr></thead><tbody>${rows.map((r, i) => `<tr class="${r.id === G.clubId ? 'me' : ''}"><td class="num">${i + 1}</td><td><span class="row" style="gap:8px;flex-wrap:nowrap">${badge(TEAM[r.id], 22)}<button class="linkbtn" data-act="team" data-id="${esc(r.id)}">${esc(TEAM[r.id].name)}</button></span></td><td class="num">${r.w}</td><td class="num">${r.l}</td><td class="num">${r.gw}-${r.gl}</td>${withStrength ? '<td class="num">' + strength(r.id).toFixed(1) + '</td>' : ''}</tr>`).join('')}</tbody></table></div>`;
 }
 function viewMatch() {
   const w = G.week, lg = TEAM[G.clubId].leagueId, t = TEAM[G.clubId], mine = myResult(w), mod = modifier(G.clubId);
-  const others = G.season.results.filter(r => r.w === w && r.a !== G.clubId && r.b !== G.clubId);
+  const others = G.season.results.filter(r => r.w === w && r.a !== G.clubId && r.b !== G.clubId && TEAM[r.a].leagueId === lg);
   const board = mine
     ? `<section class="board"><div class="side">${badge(t, 56)}<div><div class="label">You</div><h3>${esc(t.name)}</h3></div></div><div class="sc ${mine.win ? 'win' : ''}">${mine.gf} – ${mine.ga}</div><div class="side b"><div><div class="label">${mine.win ? 'Beaten' : 'Lost to'}</div><h3>${esc(mine.opp.name)}</h3></div>${badge(mine.opp, 56)}</div></section>`
     : `<section class="board"><div class="side">${badge(t, 56)}<div><div class="label">Week ${w + 1}</div><h3>Bye week</h3></div></div><div></div><div class="muted">No match for ${esc(t.name)} this week.</div></section>`;
@@ -750,20 +763,48 @@ function viewMatch() {
 function viewLeague() {
   const lg = TEAM[G.clubId].leagueId, total = seasonWeeks(), sched = scheduleFor(lg);
   const fx = sched.map((_, w) => {
-    const f = fixtureFor(w), r = G.season.results.some(x => x.w === w) ? myResult(w) : null;
+    const f = fixtureFor(w), r = myResult(w);
     const status = !f ? '<span class="muted">Bye</span>' : r ? '<span class="' + (r.win ? 'check-ok' : 'check-bad') + ' mono">' + (r.win ? 'W ' : 'L ') + r.score + '</span>' : '<span class="muted">' + (w === G.week ? 'Next' : '') + '</span>';
     return '<tr class="' + (w === G.week ? 'me' : '') + '"><td class="num">' + (w + 1) + '</td><td>' + (f ? esc(f.opp.name) : '—') + '</td><td class="num">' + status + '</td></tr>';
   }).join('');
   return `<div class="stack"><div><div class="label">${esc(LEAGUE[lg].name)} · season ${G.season.year}</div><h2>League</h2></div>
-    <section class="panel stack"><div class="label">Table after ${new Set(G.season.results.map(r => r.w)).size} of ${total} weeks</div>${tableHtml(lg, G.season.results)}</section>
+    <section class="panel stack"><div class="label">Table after ${new Set(G.season.results.filter(r => TEAM[r.a].leagueId === lg).map(r => r.w)).size} of ${total} weeks</div>${tableHtml(lg, G.season.results)}</section>
     <section class="panel stack"><div class="label">Your fixtures</div><div class="scroll"><table class="tbl"><thead><tr><th class="num">Week</th><th>Opponent</th><th class="num">Result</th></tr></thead><tbody>${fx}</tbody></table></div></section>
     ${G.seasons.length ? `<section class="panel stack"><div class="label">Past seasons</div>${G.seasons.slice().reverse().map(s => `<div class="row spread"><span>${s.year}</span><span>${ordinal(s.finish)} · ${s.wins}-${s.losses}</span><span class="muted small">Champion: ${esc((TEAM[s.champion] || {}).name || s.champion)}</span></div>`).join('')}</section>` : ''}</div>`;
 }
+function viewExplore() {
+  const lid = ui.exploreLeague || TEAM[G.clubId].leagueId, lg = LEAGUE[lid], total = scheduleFor(lid).length;
+  const lres = G.season.results.filter(r => TEAM[r.a].leagueId === lid), weeks = new Set(lres.map(r => r.w)).size;
+  const past = G.seasons.filter(x => x.champions && x.champions[lid]);
+  return `<div class="stack"><div><div class="label">Every league · season ${G.season.year}</div><h2>Explore</h2></div>
+    <div class="row">${SNAP.leagues.map(l => `<button class="chip" data-act="explore-league" data-v="${esc(l.id)}" aria-pressed="${l.id === lid}">${esc(l.id.toUpperCase())}</button>`).join('')}</div>
+    <section class="panel stack"><div class="row spread"><div><div class="label">${esc(lg.region)} · tier ${lg.tier}</div><h3>${esc(lg.name)}</h3></div><div class="muted small">Table after ${weeks} of ${total} weeks</div></div>${tableHtml(lid, lres, true)}
+      <p class="small muted">${lid === TEAM[G.clubId].leagueId ? 'Your league.' : 'Played in the background with the same formula. These clubs keep their ratings.'} Tap a club to see its players.</p></section>
+    ${past.length ? `<section class="panel stack"><div class="label">Past champions</div>${past.slice().reverse().map(x => `<div class="row spread"><span>${x.year}</span><span>${esc((TEAM[x.champions[lid]] || {}).name || x.champions[lid])}</span></div>`).join('')}</section>` : ''}</div>`;
+}
+function viewTeam() {
+  const t = TEAM[ui.teamId], lid = t.leagueId, L = lineup(t.id);
+  const lres = G.season.results.filter(r => TEAM[r.a].leagueId === lid), rows = standings(lid, lres), i = rows.findIndex(r => r.id === t.id), rec = rows[i];
+  const byStr = SNAP.teams.filter(x => x.leagueId === lid).map(x => x.id).sort((a, b) => strength(b) - strength(a)), sRank = byStr.indexOf(t.id) + 1;
+  const games = lres.filter(r => r.a === t.id || r.b === t.id).sort((a, b) => a.w - b.w).map(r => {
+    const mine = r.a === t.id, gf = mine ? r.ga : r.gb, gA = mine ? r.gb : r.ga, opp = TEAM[mine ? r.b : r.a];
+    return '<tr><td class="num">' + (r.w + 1) + '</td><td><button class="linkbtn" data-act="team" data-id="' + esc(opp.id) + '">' + esc(opp.name) + '</button></td><td class="num"><span class="' + (gf > gA ? 'check-ok' : 'check-bad') + '">' + (gf > gA ? 'W ' : 'L ') + gf + '-' + gA + '</span></td></tr>';
+  }).join('');
+  return `<div class="stack"><div class="row"><button class="btn quiet" data-act="team-back">← Back</button></div>
+    <section class="hero">${badge(t, 84)}<div><div class="label">${esc(LEAGUE[lid].name)} · tier ${LEAGUE[lid].tier}${t.id === G.clubId ? ' · your club' : ''}</div><h2>${esc(t.name)}</h2><p class="muted small" style="margin-top:6px">${ordinal(i + 1)} in the table · ${rec.w}-${rec.l} · strength ${strength(t.id).toFixed(1)} (${ordinal(sRank)} of ${byStr.length} in the league)</p></div><div></div></section>
+    <section class="stack" style="gap:10px"><div class="label">Starting five · tap a card for attributes</div><div class="cards">${L.starters.map(p => playerCard(p, false)).join('')}</div></section>
+    ${L.bench.length ? `<section class="stack" style="gap:10px"><div class="label">Bench</div><div class="cards">${L.bench.map(p => playerCard(p, true)).join('')}</div></section>` : ''}
+    ${L.starters.some(p => p.standin) ? '<div class="notice">Some roles have no player in the Liquipedia data. The game fills them with stand-ins (league base rating minus 3). They are not real players.</div>' : ''}
+    ${games ? '<section class="panel stack"><div class="label">Results this season</div><div class="scroll"><table class="tbl"><thead><tr><th class="num">Week</th><th>Opponent</th><th class="num">Result</th></tr></thead><tbody>' + games + '</tbody></table></div></section>' : ''}</div>`;
+}
 function viewSeasonEnd() {
+  const n0 = G.season.results.length; completeSeason(); if (G.season.results.length !== n0) persist();   // the longer leagues finish now
   const r = seasonResult(), t = TEAM[G.clubId], champ = TEAM[r.champion];
+  const others = ALL_LEAGUES.filter(l => l !== t.leagueId).map(l => '<div class="row spread"><span class="muted">' + esc(l.toUpperCase()) + '</span><button class="linkbtn" data-act="team" data-id="' + esc(standings(l, G.season.results)[0].id) + '">' + esc(TEAM[standings(l, G.season.results)[0].id].name) + '</button></div>').join('');
   return `<div class="stack"><div class="row">${badge(champ, 64)}<div><div class="label">Season ${G.season.year} · champion</div><h2>${esc(champ.name)}</h2></div></div>
     <section class="report"><div class="grade g-${r.finish === 1 ? 'S' : r.finish <= 3 ? 'A' : r.finish <= Math.ceil(r.rows.length / 2) ? 'B' : 'C'}">${r.finish}</div><div><div class="label">${esc(t.name)} finished</div><div class="big">${ordinal(r.finish)}<small> of ${r.rows.length}</small></div></div><div class="burst">${r.wins} ${r.wins === 1 ? 'win' : 'wins'} · ${r.losses} ${r.losses === 1 ? 'loss' : 'losses'}</div></section>
     <section class="panel stack"><div class="label">Final table</div>${tableHtml(t.leagueId, G.season.results)}</section>
+    <section class="panel stack"><div class="label">Champions of the other leagues</div>${others}</section>
     <div class="row"><button class="btn" data-act="new-season">Start season ${G.season.year + 1}</button><span class="small muted">Same teams and ratings. The table resets. Your club values stay.</span></div></div>`;
 }
 
@@ -920,15 +961,17 @@ function animateIn() {
 function render() {
   const nav = $('#nav'), brand = $('#brand');
   document.documentElement.style.setProperty('--club-h', G ? teamHue(G.clubId) : 196);
-  const tabs = G ? [['club', 'Club'], ['league', 'League'], ['history', 'History'], ['save', 'Save'], ['credits', 'Credits']] : [['club', 'Choose club'], ['credits', 'Credits']];
+  const tabs = G ? [['club', 'Club'], ['league', 'League'], ['explore', 'Explore'], ['history', 'History'], ['save', 'Save'], ['credits', 'Credits']] : [['club', 'Choose club'], ['credits', 'Credits']];
   const inScene = ['match', 'long', 'shot', 'feedback-long', 'summary', 'season-end'].indexOf(ui.view) >= 0;
-  nav.innerHTML = tabs.map(t => '<button data-act="nav" data-v="' + t[0] + '" ' + ((ui.view === t[0] || (t[0] === 'club' && (inScene || (!G && ui.view !== 'credits')))) ? 'aria-current="page"' : '') + '>' + t[1] + '</button>').join('');
+  nav.innerHTML = tabs.map(t => '<button data-act="nav" data-v="' + t[0] + '" ' + ((ui.view === t[0] || (t[0] === 'explore' && ui.view === 'team') || (t[0] === 'club' && (inScene || (!G && ui.view !== 'credits')))) ? 'aria-current="page"' : '') + '>' + t[1] + '</button>').join('');
   brand.innerHTML = G ? badge(TEAM[G.clubId], 38) + '<div><div class="brand-name">' + esc(TEAM[G.clubId].name) + '</div><div class="brand-sub">' + esc(LEAGUE[TEAM[G.clubId].leagueId].name) + ' · week ' + (G.week + 1) + '</div></div>' : '<div><div class="brand-name">Esports Club English</div><div class="brand-sub">Manage a club. Win in English.</div></div>';
   let html = '';
   if (ui.view === 'boot') html = '<div class="panel"><span class="spinner"></span>Loading your game…</div>';
   else if (!G && ui.view !== 'credits') html = viewPicker();
   else if (ui.view === 'club') html = viewClub();
   else if (ui.view === 'league') html = viewLeague();
+  else if (ui.view === 'explore') html = viewExplore();
+  else if (ui.view === 'team') html = viewTeam();
   else if (ui.view === 'match') html = viewMatch();
   else if (ui.view === 'season-end') html = viewSeasonEnd();
   else if (ui.view === 'long') html = viewLong();
@@ -980,6 +1023,9 @@ function sendLong(force) {
 const ACTIONS = {
   nav(b) { ui.exportText = null; ui.notice = null; ui.confirmReset = false; if (b.dataset.v === 'history') ui.history = null; go(b.dataset.v); },
   filter(b) { ui.filter = b.dataset.v; render(); },
+  'explore-league'(b) { ui.exploreLeague = b.dataset.v; render(); },
+  team(b) { if (ui.view !== 'team') ui.teamBack = ui.view; ui.teamId = b.dataset.id; go('team'); },
+  'team-back'() { go(ui.teamBack || 'explore'); },
   pick(b) { ui.pending = b.dataset.id; render(); window.scrollTo(0, 0); },
   unpick() { ui.pending = null; render(); },
   async start(b) { G = newGame(b.dataset.id); ui.pending = null; await persist(); go('club'); },
@@ -993,8 +1039,10 @@ const ACTIONS = {
   },
   'to-long'() { ui.scene = buildLongScene(G.week); ui.drafts = ui.scene.qs.map(() => ''); ui.hints = ui.scene.qs.map(() => false); ui.shortWarn = false; go('long'); },
   async 'new-season'() {
-    const r = seasonResult();
-    G.seasons.push({ year: G.season.year, champion: r.champion, finish: r.finish, wins: r.wins, losses: r.losses });
+    completeSeason();
+    const r = seasonResult(), champions = {};
+    ALL_LEAGUES.forEach(l => { champions[l] = standings(l, G.season.results)[0].id; });
+    G.seasons.push({ year: G.season.year, champion: r.champion, finish: r.finish, wins: r.wins, losses: r.losses, champions });
     G.season = { year: G.season.year + 1, seed: newSeed(), results: [] }; G.week = 0; G.flow = { week: 0, longDone: false };
     Object.keys(G.contracts).forEach(k => { if (G.contracts[k] < G.season.year) G.contracts[k] = G.season.year; });   // nobody leaves in version 1
     await persist(); go('club');
@@ -1050,7 +1098,7 @@ const ACTIONS = {
   },
   async 'import-yes'() {
     const d = ui.importDoc; await Store.clearAll();
-    G = upgradeSave(d.save); for (const h of d.history) await Store.addHistory(h);
+    G = upgradeSave(d.save); catchUpLeagues(); for (const h of d.history) await Store.addHistory(h);
     await persist(); ui.importDoc = null; ui.notice = { text: 'Backup restored.' }; ui.history = null; render();
   },
   'import-no'() { ui.importDoc = null; render(); },
@@ -1125,9 +1173,9 @@ document.addEventListener('toggle', e => { if (e.target.matches && e.target.matc
   render();
   await Store.init();
   const saved = await Store.loadSave();
-  if (saved && TEAM[saved.clubId]) { const old = saved.schema; G = upgradeSave(saved); if (old !== G.schema) await persist(); Store.setStatus(Store.mode === 'cloud' ? 'Saved to your claude.ai account' : 'Saved on this device only'); go('club'); }
+  if (saved && TEAM[saved.clubId]) { const old = saved.schema; G = upgradeSave(saved); const n0 = G.season.results.length; catchUpLeagues(); if (old !== G.schema || G.season.results.length !== n0) await persist(); Store.setStatus(Store.mode === 'cloud' ? 'Saved to your claude.ai account' : 'Saved on this device only'); go('club'); }
   else { Store.setStatus(Store.mode === 'cloud' ? 'Your save will be kept in your claude.ai account' : 'Your save will stay on this device'); go('club'); }
 })();
-if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, buildLongScene, shotRound, SHOT_GROUPS, PRESS_BANK, NEG_RENEW, NEG_OTHER, dueContractPlayer, applyContract, negYears, myResult, getG: () => G, setG: g => { G = g; } };   // set only by the local preview, for checks
+if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, ensureLeaguesTo, completeSeason, catchUpLeagues, ALL_LEAGUES, buildLongScene, shotRound, SHOT_GROUPS, PRESS_BANK, NEG_RENEW, NEG_OTHER, dueContractPlayer, applyContract, negYears, myResult, getG: () => G, setG: g => { G = g; } };   // set only by the local preview, for checks
 })();
 </script>

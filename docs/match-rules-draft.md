@@ -53,7 +53,7 @@ Calibration with the real strengths (3,000 simulated seasons, scale 6): the stro
 ## Season and table
 
 - **Schedule:** round robin by the circle method, one match per club per week. With an odd number of teams (LJL, 7) each club has one **bye week**. The user's club has no match that week: the match day plays the contract scene instead of the press conference, then shotcalling.
-- **Table:** match wins, then game difference, then (rare) a fixed order by club id. Only the user's league is simulated each week (the other leagues are not shown in version 1).
+- **Table:** match wins, then game difference, then (rare) a fixed order by club id. Only the user's league is simulated each week (the other leagues are not shown in version 1). **Changed on 2026-10-11 after the build:** every league is now played at the same time and the Explore tab shows them; see the spec ("Match simulation", item 4) and save schema 4.
 - **End of season:** final table, champion, the user's finish, season summary. Then the game starts the next season (year + 1) with the same teams and ratings. The table resets, club values stay, a short history of past seasons is kept. No promotion or relegation in version 1.
 
 ## Screens (Stage 3)
