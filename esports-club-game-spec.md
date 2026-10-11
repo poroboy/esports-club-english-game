@@ -116,6 +116,13 @@ Chunks are sentence starters the player can continue freely. **[TRIAL]**
 - After the feedback, the game shows one chunk that suits the situation.
 - Shotcalling shows no hint, because the calls are short and timed.
 
+## Phrasebook (added 2026-10-11, approved by the user)
+
+- A **☆ Keep** button on each Level up line and on "A chunk to keep" saves a card (the phrase, the plain wording it replaces, the situation, the note, the Thai note if the Thai help was used, the level). The same phrase is never saved twice.
+- A **Phrasebook** tab lists the cards (filter all / Level up / chunks, search, delete with a second click). A number on the tab shows the cards not yet in box 4.
+- **Review** takes 5 cards (lowest box first, then the least reviewed, then the oldest). The player types the phrase from memory, sees the answer, and marks "I got it" (box + 1, up to 4) or "Not yet" (back to box 1). There are no dates and no timer: a break never piles anything up. Reviews are free (no check request), never change club values, and are not scored (design principles 2 and 4).
+- Storage: one document per card in the user's private area (the history works the same way), or this device when the account store is not available. The backup file has an extra `phrasebook` list (a backup without it leaves the phrasebook alone). "Delete save and start again" keeps the phrasebook. The save schema, the snapshot and the check-response shape do not change.
+
 ## Feedback screen
 
 After every answer the player sees:
@@ -283,6 +290,7 @@ Language affects the modifiers (chemistry, morale), not the result directly.
 | GM-16 | Long scenes have a Hint button with 1 or 2 starter chunks (no score cost in version 1); the feedback shows one suited chunk |
 | GM-17 | Feedback is in English at about B1; a Thai help button shows the Thai version on demand |
 | GM-18 | A shotcalling round has 3 situations and one check request per round |
+| GM-19 | A phrasebook of kept Level up phrases and chunks, reviewed by typing from memory, free of check requests and never affecting club values |
 
 ## Stages and models
 

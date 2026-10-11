@@ -181,6 +181,8 @@ a { color: var(--club); }
 @media (max-width: 520px) { .score { grid-template-columns: 96px 1fr 32px; } h2 { font-size: 28px; } .comms { grid-template-columns: 1fr; } .bubble { font-size: 16px; } }
 .up { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .up li { border-left: 3px solid var(--gold); padding-left: 12px; }
+.keepbtn { margin-top: 4px; padding: 3px 12px; font-size: 14px; }
+.dots.sm i { width: 16px; }
 /* match day, tables */
 .linkbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .linkbtn:hover { text-decoration: underline; text-decoration-color: var(--club); }
@@ -299,7 +301,7 @@ const rarity = o => (o >= 85 ? 'diamond' : o >= 75 ? 'gold' : o >= 62 ? 'silver'
 
 /* ---------------------------------------------------------------- storage (db when available, else this device) */
 const Store = {
-  mode: 'pending', uid: null, db: null, chain: Promise.resolve(), status: '', mem: {},
+  mode: 'pending', uid: null, db: null, chain: Promise.resolve(), status: '', mem: {}, memCards: {},
   async init() {
     try {
       if (window.claude && window.claude.use) {
@@ -344,14 +346,36 @@ const Store = {
     const byId = {}; list.forEach(x => { byId[x.id] = x; }); Object.keys(this.mem).forEach(k => { byId[k] = this.mem[k]; });
     return Object.keys(byId).map(k => byId[k]).sort((a, b) => b.at - a.at);
   },
-  async clearAll() {
-    const hist = await this.loadHistory();
+  addCard(card) {   // phrasebook cards are separate documents, like the history
+    const c = clone(card);
+    this.memCards[c.id] = c;
+    return this.queue(async () => {
+      if (this.mode === 'cloud') { try { await this.col().doc(c.id).set(c); return; } catch (err) { /* local fallback below */ } }
+      const list = this.lsGet('ecg-phrasebook-v1', []).filter(x => x.id !== c.id); list.push(c); this.lsSet('ecg-phrasebook-v1', list);
+    });
+  },
+  deleteCard(id) {
+    delete this.memCards[id];
+    return this.queue(async () => {
+      if (this.mode === 'cloud') { try { await this.col().doc(id).delete(); } catch (err) { /* ignore */ } }
+      this.lsSet('ecg-phrasebook-v1', this.lsGet('ecg-phrasebook-v1', []).filter(x => x.id !== id));
+    });
+  },
+  async loadCards() {
+    let list = [];
+    if (this.mode === 'cloud') { try { const q = await this.col().get(); list = q.docs.filter(d => d.id.indexOf('pb-') === 0).map(d => clone(d.data())); } catch (e) { /* ignore */ } }
+    else list = this.lsGet('ecg-phrasebook-v1', []);
+    const byId = {}; list.forEach(x => { byId[x.id] = x; }); Object.keys(this.memCards).forEach(k => { byId[k] = this.memCards[k]; });
+    return Object.keys(byId).map(k => byId[k]).sort((a, b) => a.at - b.at);
+  },
+  async clearAll(opts) {   // opts.keepCards: the phrasebook stays (a new career does not erase what you learned)
+    const hist = await this.loadHistory(), cards = opts && opts.keepCards ? [] : await this.loadCards();
     await this.queue(async () => {
       if (this.mode === 'cloud') {
-        try { await this.col().doc('save').delete(); for (const h of hist) await this.col().doc(h.id).delete(); } catch (e) { /* ignore */ }
+        try { await this.col().doc('save').delete(); for (const h of hist) await this.col().doc(h.id).delete(); for (const c of cards) await this.col().doc(c.id).delete(); } catch (e) { /* ignore */ }
       }
-      try { localStorage.removeItem('ecg-save-v1'); localStorage.removeItem('ecg-history-v1'); } catch (e) { /* ignore */ }
-      this.mem = {};
+      try { localStorage.removeItem('ecg-save-v1'); localStorage.removeItem('ecg-history-v1'); if (!(opts && opts.keepCards)) localStorage.removeItem('ecg-phrasebook-v1'); } catch (e) { /* ignore */ }
+      this.mem = {}; if (!(opts && opts.keepCards)) this.memCards = {};
     });
   }
 };
@@ -695,7 +719,7 @@ const ERR_COPY = {
 const errCopy = e => ERR_COPY[e && e.code] || 'The check did not work. Your answer is kept. Try again. No effect was applied.';
 
 /* ---------------------------------------------------------------- UI state */
-const ui = { view: 'boot', filter: 'All', search: '', pending: null, drafts: [], hints: [], shortWarn: false, selftestMin: null, checking: false, error: null, result: null, ctl: null, startedAt: 0, shot: null, history: null, importDoc: null, confirmReset: false, selftest: null, expand: {}, summary: null };
+const ui = { view: 'boot', filter: 'All', search: '', pending: null, drafts: [], hints: [], shortWarn: false, selftestMin: null, checking: false, error: null, result: null, ctl: null, startedAt: 0, shot: null, history: null, importDoc: null, confirmReset: false, selftest: null, expand: {}, summary: null, cards: [], pbFilter: 'all', pbSearch: '', review: null, confirmDel: null };
 const app = $('#app');
 function go(view) { ui.view = view; ui.error = null; render(); window.scrollTo(0, 0); }
 const valueMeter = (k, now, before) => {
@@ -880,7 +904,10 @@ function markup(answer, issues) {
   return out + esc(answer.slice(pos));
 }
 const sameText = (a, b) => a.replace(/\s+/g, '').toLowerCase() === b.replace(/\s+/g, '').toLowerCase();
-function itemHtml(it, dims, n, thai) {
+const normPhrase = t => t.toLowerCase().replace(/\.\.\.|…/g, ' ').replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
+const isKept = (kind, text) => ui.cards.some(c => c.kind === kind && normPhrase(c.text) === normPhrase(text));
+const keepBtn = (kind, text, attrs) => '<button class="btn quiet keepbtn" data-act="keep" data-kind="' + kind + '" ' + attrs + (isKept(kind, text) ? ' disabled>★ Kept' : '>☆ Keep') + '</button>';
+function itemHtml(it, dims, n, thai, eid, idx) {
   const th = thai && thai[n] ? thai[n] : null;
   return `<div class="panel stack">
     ${it.situation && n != null ? '<div class="small muted">' + esc(it.situation) + '</div>' : ''}
@@ -888,7 +915,7 @@ function itemHtml(it, dims, n, thai) {
     <div><div class="label">Corrected</div><div class="quote fix">${esc(it.corrected)}</div></div>
     <div><div class="label">Meaning</div><p>${esc(it.meaning)}</p>${th ? '<p class="muted" lang="th">' + esc(th.meaningTh || '') + '</p>' : ''}</div>
     ${it.issues.length ? '<div><div class="label">Why</div><ol style="margin:4px 0 0;padding-left:20px">' + it.issues.map((x, k) => '<li><mark>' + esc(x.span || '…') + '</mark> → ' + (sameText(x.span, x.fix) ? '<span class="muted">punctuation or spacing: see the reason</span>' : '<span class="fix">' + esc(x.fix) + '</span>') + '<br><span class="muted">' + esc(x.reason) + '</span>' + (th && th.reasonsTh && th.reasonsTh[k] ? '<br><span class="muted" lang="th">' + esc(th.reasonsTh[k]) + '</span>' : '') + '</li>').join('') + '</ol></div>' : '<p class="check-ok">No mistakes found.</p>'}
-    ${it.upgrades && it.upgrades.length ? '<div><div class="label">Level up</div><ul class="up">' + it.upgrades.map((u, k) => '<li>' + (u.original ? '“' + esc(u.original) + '” → ' : '') + '<strong>' + esc(u.better) + '</strong>' + (u.level ? ' <span class="pill">' + u.level + '</span>' : '') + (u.why ? '<br><span class="muted">' + esc(u.why) + '</span>' : '') + (th && th.upgradesTh && th.upgradesTh[k] ? '<br><span class="muted" lang="th">' + esc(th.upgradesTh[k]) + '</span>' : '') + '</li>').join('') + '</ul></div>' : ''}
+    ${it.upgrades && it.upgrades.length ? '<div><div class="label">Level up</div><ul class="up">' + it.upgrades.map((u, k) => '<li>' + (u.original ? '“' + esc(u.original) + '” → ' : '') + '<strong>' + esc(u.better) + '</strong>' + (u.level ? ' <span class="pill">' + u.level + '</span>' : '') + (u.why ? '<br><span class="muted">' + esc(u.why) + '</span>' : '') + (th && th.upgradesTh && th.upgradesTh[k] ? '<br><span class="muted" lang="th">' + esc(th.upgradesTh[k]) + '</span>' : '') + (eid ? '<br>' + keepBtn('upgrade', u.better, 'data-eid="' + esc(eid) + '" data-n="' + idx + '" data-k="' + k + '"') : '') + '</li>').join('') + '</ul></div>' : ''}
     <div class="stack" style="gap:6px">${dims.map(d => bar(d[1], it.scores[d[0]])).join('')}${it.seconds != null ? '<p class="small muted mono">Typing time ' + it.seconds.toFixed(1) + ' s · speed credit ' + Math.round(speedFactor(it.seconds) * 100) + '%</p>' : ''}</div></div>`;
 }
 function viewFeedback(entry, opts) {
@@ -900,8 +927,8 @@ function viewFeedback(entry, opts) {
       <div><div class="label">${esc(entry.title)} report${opts.history ? ' · week ' + (entry.week + 1) : ''}</div><div class="big"><span data-count="${entry.total}">${entry.total}</span><small> / 100</small></div></div>
       <div class="burst">${eff.delta > 0 ? '+' + eff.delta + ' ' + esc(VALUE_LABEL[eff.target]) : 'No change to ' + esc(VALUE_LABEL[eff.target].toLowerCase())}</div></section>
     ${entry.contract ? '<div class="panel flat"><div class="label">Contract</div><p>' + esc(entry.contract.handle) + ' signs for ' + entry.contract.years + (entry.contract.years === 1 ? ' more year' : ' more years') + ', until ' + entry.contract.until + '.</p></div>' : ''}
-    ${entry.items.map((it, n) => itemHtml(it, dims, entry.items.length > 1 ? n : (it.situation ? 0 : null), entry.thai)).join('')}
-    ${entry.chunk ? '<div class="panel flat"><div class="label">A chunk to keep</div><p style="font-size:18px;margin-top:4px">' + esc(entry.chunk) + '</p></div>' : ''}
+    ${entry.items.map((it, n) => itemHtml(it, dims, entry.items.length > 1 ? n : (it.situation ? 0 : null), entry.thai, entry.id, n)).join('')}
+    ${entry.chunk ? '<div class="panel flat"><div class="label">A chunk to keep</div><div class="row spread" style="margin-top:4px"><p style="font-size:18px">' + esc(entry.chunk) + '</p>' + keepBtn('chunk', entry.chunk, 'data-eid="' + esc(entry.id) + '"') + '</div></div>' : ''}
     ${ui.error && !opts.history ? '<div class="notice bad" role="alert">' + esc(ui.error) + '</div>' : ''}
     ${opts.history ? '' : '<div class="row">' + thaiBtn + '<button class="btn" data-act="' + (opts.next === 'finish' ? 'finish' : 'to-shot') + '">' + (opts.next === 'finish' ? 'End the match day' : 'Next: shotcalling') + '</button></div>'}</div>`;
 }
@@ -914,6 +941,56 @@ function viewSummary() {
     <div class="row"><button class="btn" data-act="nav" data-v="club">Back to the club</button></div></div>`;
 }
 
+/* ---------- phrasebook */
+const dueCards = () => ui.cards.filter(c => c.box < 4).length;
+const newCardId = () => 'pb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function cleanCard(c) {   // for files from outside: a safe card or null
+  if (!c || typeof c.id !== 'string' || !/^pb-[A-Za-z0-9-]+$/.test(c.id) || (c.kind !== 'upgrade' && c.kind !== 'chunk') || typeof c.text !== 'string' || !c.text.trim()) return null;
+  const t = v => (typeof v === 'string' ? v.slice(0, 600) : '');
+  return { id: c.id, kind: c.kind, text: t(c.text), from: t(c.from), ctx: t(c.ctx), note: t(c.note), noteTh: t(c.noteTh), level: c.level === 'B2' || c.level === 'C1' ? c.level : '', box: clamp(Math.round(+c.box) || 1, 1, 4), seen: Math.max(0, Math.round(+c.seen) || 0), at: +c.at || Date.now() };
+}
+const findEntry = eid => [ui.result, ui.shot && ui.shot.results].concat(ui.history || []).find(e => e && e.id === eid);
+function cardHtml(c) {
+  return `<div class="panel stack" style="gap:6px"><div class="row spread"><div class="row" style="gap:8px"><span class="pill">${c.kind === 'chunk' ? 'Chunk' : 'Level up'}</span>${c.level ? '<span class="pill">' + c.level + '</span>' : ''}<span class="dots sm" role="img" aria-label="Box ${c.box} of 4">${[1, 2, 3, 4].map(i => '<i class="' + (i <= c.box ? 'on' : '') + '"></i>').join('')}</span></div>
+    ${ui.confirmDel === c.id ? '<span class="row"><button class="btn danger" data-act="pb-del-yes" data-id="' + esc(c.id) + '">Delete</button><button class="btn quiet" data-act="pb-del-no">Keep it</button></span>' : '<button class="btn quiet" data-act="pb-del" data-id="' + esc(c.id) + '">Delete</button>'}</div>
+    <div style="font-size:19px;font-weight:600">${esc(c.text)}</div>
+    ${c.from ? '<div class="small muted">Instead of “' + esc(c.from) + '”</div>' : ''}
+    ${c.ctx ? '<div class="small muted">' + esc(c.ctx) + '</div>' : ''}
+    ${c.note ? '<div class="small">' + esc(c.note) + '</div>' : ''}
+    ${c.noteTh ? '<div class="small muted" lang="th">' + esc(c.noteTh) + '</div>' : ''}</div>`;
+}
+function viewPhrasebook() {
+  const f = ui.pbFilter, q = ui.pbSearch.trim().toLowerCase();
+  const list = ui.cards.filter(c => (f === 'all' || c.kind === f) && (!q || (c.text + ' ' + c.from + ' ' + c.note + ' ' + c.ctx).toLowerCase().indexOf(q) >= 0)).sort((a, b) => b.at - a.at);
+  return `<div class="stack"><div class="row spread"><div><div class="label">${ui.cards.length} saved · ${dueCards()} to review</div><h2>Phrasebook</h2></div>${ui.cards.length ? '<button class="btn" data-act="review-start">Review ' + Math.min(5, ui.cards.length) + ' cards</button>' : ''}</div>
+    ${ui.cards.length ? '' : '<div class="panel stack"><p>Nothing here yet. After a check, press <strong>☆ Keep</strong> on a Level up line or on "A chunk to keep" to save it. You review it here by typing it from memory. Reviews are free, have no timer and never change your club values.</p></div>'}
+    ${ui.cards.length ? `<div class="row">${[['all', 'All'], ['upgrade', 'Level up'], ['chunk', 'Chunks']].map(x => `<button class="chip" data-act="pb-filter" data-v="${x[0]}" aria-pressed="${f === x[0]}">${x[1]}</button>`).join('')}<div class="grow"><input type="search" id="pb-search" placeholder="Search your phrases" value="${esc(ui.pbSearch)}" aria-label="Search your phrases"></div></div>` : ''}
+    ${list.map(cardHtml).join('')}
+    ${ui.cards.length && !list.length ? '<p class="muted">No phrase matches.</p>' : ''}</div>`;
+}
+function viewReview() {
+  const R = ui.review;
+  if (R.i >= R.ids.length) {
+    return `<div class="stack"><div><div class="label">Review done</div><h2>${R.got} of ${R.ids.length} got it</h2></div><p class="muted">Cards you missed go back to box 1 and come first next time. Reviews never change your club values.</p><div class="row"><button class="btn" data-act="review-start">Review again</button><button class="btn quiet" data-act="nav" data-v="phrasebook">Back to the phrasebook</button></div></div>`;
+  }
+  const c = ui.cards.find(x => x.id === R.ids[R.i]);
+  if (!c) { R.i++; return viewReview(); }
+  const pips = '<div class="pips" role="img" aria-label="Card ' + (R.i + 1) + ' of ' + R.ids.length + '">' + R.ids.map((_, k) => '<i class="' + (k <= R.i ? 'on' : '') + '"></i>').join('') + '</div>';
+  const isChunk = c.kind === 'chunk';
+  const front = (isChunk ? '' : c.from ? '<div class="alert" style="font-size:19px">Plain wording: “' + esc(c.from) + '”</div>' : '') + (c.ctx ? '<p class="small muted">' + esc(c.ctx) + '</p>' : '');
+  let body;
+  if (R.phase === 'ask') {
+    body = `<label class="label" for="review-input">${isChunk ? 'Type a sentence starter you could use in this situation' : 'Say it with more level: type the phrase from memory'}</label>
+      <input type="text" id="review-input" autocomplete="off" placeholder="Type it here, then press Enter"><div class="row"><button class="btn" data-act="review-show">Show the answer</button></div>`;
+  } else {
+    body = `${R.typed ? '<div><div class="label">You wrote</div><div class="quote">' + esc(R.typed) + '</div></div>' : ''}
+      <div><div class="label">${isChunk ? 'The chunk' : 'The phrase'}</div><div class="quote fix">${esc(c.text)}</div></div>
+      ${c.note ? '<p class="small">' + esc(c.note) + '</p>' : ''}${c.noteTh ? '<p class="small muted" lang="th">' + esc(c.noteTh) + '</p>' : ''}
+      <div class="row"><button class="btn" data-act="review-ok">I got it</button><button class="btn secondary" data-act="review-no">Not yet</button></div>`;
+  }
+  return `<div class="stack"><div class="row spread"><span class="label">Review · card ${R.i + 1} of ${R.ids.length}</span>${pips}</div>${front}${body}</div>`;
+}
+
 /* ---------- history, save, credits */
 function viewHistory() {
   if (ui.history == null) return '<div class="panel"><span class="spinner"></span>Loading history…</div>';
@@ -924,13 +1001,13 @@ function viewSave() {
   const where = Store.mode === 'cloud' ? 'Your save lives in your private claude.ai account storage and follows you to your other devices.' : 'Your save is stored on this device only. Open the game in claude.ai, signed in, to keep it in your account.';
   return '<div class="stack"><h2>Save</h2><div class="panel stack"><p>' + esc(where) + '</p><p class="small muted">The game saves by itself after every step. A backup file protects you if the page is ever republished as a new artifact.</p>' +
     '<div class="row"><button class="btn" data-act="export">Export backup</button><label class="btn secondary" for="import-file" style="cursor:pointer">Import backup</label><input type="file" id="import-file" accept=".json,application/json" hidden></div>' + (ui.exportText ? '<div class="stack" style="gap:6px"><p class="small muted">Downloads are not available here. Copy this text into a .json file:</p><textarea readonly id="export-text" style="min-height:90px">' + esc(ui.exportText) + '</textarea></div>' : '') + (ui.notice ? '<div class="notice ' + (ui.notice.bad ? 'bad' : 'good') + '" role="status">' + esc(ui.notice.text) + '</div>' : '') + importPanel() + '</div>' +
-    '<div class="panel stack"><h3>Start again</h3>' + (ui.confirmReset ? '<p>This deletes your club, week, values and the whole history. It cannot be undone.</p><div class="row"><button class="btn danger" data-act="reset-yes">Delete everything</button><button class="btn quiet" data-act="reset-no">Keep my save</button></div>' : '<div class="row"><button class="btn danger" data-act="reset">Delete save and start again</button></div>') + '</div>' +
+    '<div class="panel stack"><h3>Start again</h3>' + (ui.confirmReset ? '<p>This deletes your club, week, values and the whole history. It cannot be undone. Your phrasebook stays.</p><div class="row"><button class="btn danger" data-act="reset-yes">Delete everything</button><button class="btn quiet" data-act="reset-no">Keep my save</button></div>' : '<div class="row"><button class="btn danger" data-act="reset">Delete save and start again</button></div>') + '</div>' +
     '<div class="panel stack"><h3>Scoring self-test</h3><p class="small muted">Sends three sample answers to Claude and checks that a harder structure with some mistakes still scores above a plain correct one-clause answer (spec, scoring rule 2). Uses 3 checks.</p><div class="row"><button class="btn secondary" data-act="selftest" ' + (ui.checking ? 'disabled' : '') + '>Run the test</button></div>' + selftestHtml() + '</div>' +
     '<div class="panel stack"><h3>Minimum-length test</h3><p class="small muted">Sends one short and one long version of the same answer (minimum 25 words) and checks that the short one cannot score high on linking and development (scoring rule 1). Uses 2 checks.</p><div class="row"><button class="btn secondary" data-act="selftestmin" ' + (ui.checking ? 'disabled' : '') + '>Run the test</button></div>' + selftestMinHtml() + '</div></div>';
 }
 function importPanel() {
   const d = ui.importDoc; if (!d) return '';
-  return '<div class="panel flat stack"><strong>Backup found</strong><p class="small">Club: ' + esc((TEAM[d.save.clubId] || {}).name || d.save.clubId) + ' · week ' + (d.save.week + 1) + ' · ' + d.history.length + ' history entries · exported ' + new Date(d.exportedAt).toLocaleString() + '</p><p class="small muted">Importing replaces your current save and history.</p><div class="row"><button class="btn" data-act="import-yes">Replace my save</button><button class="btn quiet" data-act="import-no">Cancel</button></div></div>';
+  return '<div class="panel flat stack"><strong>Backup found</strong><p class="small">Club: ' + esc((TEAM[d.save.clubId] || {}).name || d.save.clubId) + ' · week ' + (d.save.week + 1) + ' · ' + d.history.length + ' history entries' + (d.cards ? ' · ' + d.cards.length + (d.cards.length === 1 ? ' saved phrase' : ' saved phrases') : '') + ' · exported ' + new Date(d.exportedAt).toLocaleString() + '</p><p class="small muted">Importing replaces your current save and history.</p><div class="row"><button class="btn" data-act="import-yes">Replace my save</button><button class="btn quiet" data-act="import-no">Cancel</button></div></div>';
 }
 const SELFTEST = {
   scene: { title: 'Press conference', prompt: 'Journalist: You lost 1-2 to Dplus. What went wrong today?', minWords: 0 },
@@ -970,12 +1047,15 @@ function animateIn() {
     requestAnimationFrame(step);
   });
 }
+function navHtml() {
+  const tabs = G ? [['club', 'Club'], ['league', 'League'], ['explore', 'Explore'], ['phrasebook', 'Phrasebook'], ['history', 'History'], ['save', 'Save'], ['credits', 'Credits']] : [['club', 'Choose club'], ['credits', 'Credits']];
+  const inScene = ['match', 'long', 'shot', 'feedback-long', 'summary', 'season-end'].indexOf(ui.view) >= 0;
+  return tabs.map(t => '<button data-act="nav" data-v="' + t[0] + '" ' + ((ui.view === t[0] || (t[0] === 'explore' && ui.view === 'team') || (t[0] === 'phrasebook' && ui.view === 'review') || (t[0] === 'club' && (inScene || (!G && ui.view !== 'credits')))) ? 'aria-current="page"' : '') + '>' + t[1] + (t[0] === 'phrasebook' && dueCards() ? ' <span class="pill">' + dueCards() + '</span>' : '') + '</button>').join('');
+}
 function render() {
   const nav = $('#nav'), brand = $('#brand');
   document.documentElement.style.setProperty('--club-h', G ? teamHue(G.clubId) : 196);
-  const tabs = G ? [['club', 'Club'], ['league', 'League'], ['explore', 'Explore'], ['history', 'History'], ['save', 'Save'], ['credits', 'Credits']] : [['club', 'Choose club'], ['credits', 'Credits']];
-  const inScene = ['match', 'long', 'shot', 'feedback-long', 'summary', 'season-end'].indexOf(ui.view) >= 0;
-  nav.innerHTML = tabs.map(t => '<button data-act="nav" data-v="' + t[0] + '" ' + ((ui.view === t[0] || (t[0] === 'explore' && ui.view === 'team') || (t[0] === 'club' && (inScene || (!G && ui.view !== 'credits')))) ? 'aria-current="page"' : '') + '>' + t[1] + '</button>').join('');
+  nav.innerHTML = navHtml();
   brand.innerHTML = G ? badge(TEAM[G.clubId], 38) + '<div><div class="brand-name">' + esc(TEAM[G.clubId].name) + '</div><div class="brand-sub">' + esc(LEAGUE[TEAM[G.clubId].leagueId].name) + ' · week ' + (G.week + 1) + '</div></div>' : '<div><div class="brand-name">Esports Club English</div><div class="brand-sub">Manage a club. Win in English.</div></div>';
   let html = '';
   if (ui.view === 'boot') html = '<div class="panel"><span class="spinner"></span>Loading your game…</div>';
@@ -990,12 +1070,15 @@ function render() {
   else if (ui.view === 'feedback-long') html = viewFeedback(ui.result, { next: 'shot' });
   else if (ui.view === 'shot') html = viewShot();
   else if (ui.view === 'summary') html = viewSummary();
+  else if (ui.view === 'phrasebook') html = viewPhrasebook();
+  else if (ui.view === 'review') html = viewReview();
   else if (ui.view === 'history') html = viewHistory();
   else if (ui.view === 'save') html = viewSave();
   else if (ui.view === 'credits') html = viewCredits();
   app.innerHTML = html;
   const sv = $('#savestate'); if (sv) sv.textContent = Store.status;
   if (ui.view === 'long') updateWc();
+  if (ui.view === 'review' && ui.review.phase === 'ask') { const ri = $('#review-input'); if (ri) ri.focus(); }
   if (ui.view === 'shot' && ui.shot && !ui.shot.review && !ui.shot.results) { const c = $('#call'); if (c) { c.focus(); } }
   if (ui.view === 'feedback-long' || ui.view === 'shot' || ui.view === 'history') animateIn();
   if (ui.view === 'history' && ui.history == null) Store.loadHistory().then(h => { ui.history = h; if (ui.view === 'history') render(); });
@@ -1032,9 +1115,39 @@ function sendLong(force) {
     ui.result = entry; go('feedback-long');
   });
 }
+async function gradeCard(ok) {
+  const R = ui.review, c = ui.cards.find(x => x.id === R.ids[R.i]);
+  if (c) { c.box = ok ? Math.min(4, c.box + 1) : 1; c.seen = (c.seen || 0) + 1; await Store.addCard(c); if (ok) R.got++; }
+  R.i++; R.phase = 'ask'; R.typed = ''; render();
+}
 const ACTIONS = {
   nav(b) { ui.exportText = null; ui.notice = null; ui.confirmReset = false; if (b.dataset.v === 'history') ui.history = null; go(b.dataset.v); },
   filter(b) { ui.filter = b.dataset.v; render(); },
+  async keep(b) {
+    const ent = findEntry(b.dataset.eid); if (!ent) return;
+    let card;
+    if (b.dataset.kind === 'chunk') {
+      if (!ent.chunk) return;
+      card = { kind: 'chunk', text: ent.chunk, from: '', ctx: ((ent.items[0] || {}).situation) || '', note: '', noteTh: '', level: '' };
+    } else {
+      const n = +b.dataset.n, k = +b.dataset.k, it = ent.items[n], u = it && it.upgrades && it.upgrades[k]; if (!u) return;
+      card = { kind: 'upgrade', text: u.better, from: u.original, ctx: it.situation || '', note: u.why, noteTh: (((ent.thai || [])[n] || {}).upgradesTh || [])[k] || '', level: u.level };
+    }
+    if (!isKept(card.kind, card.text)) { Object.assign(card, { id: newCardId(), box: 1, seen: 0, at: Date.now() }); ui.cards.push(card); await Store.addCard(card); }
+    b.textContent = '★ Kept'; b.disabled = true; $('#nav').innerHTML = navHtml();
+  },
+  'pb-filter'(b) { ui.pbFilter = b.dataset.v; render(); },
+  'pb-del'(b) { ui.confirmDel = b.dataset.id; render(); },
+  'pb-del-no'() { ui.confirmDel = null; render(); },
+  async 'pb-del-yes'(b) { ui.cards = ui.cards.filter(c => c.id !== b.dataset.id); ui.confirmDel = null; await Store.deleteCard(b.dataset.id); render(); },
+  'review-start'() {   // 5 cards: lowest box first, then the least reviewed, then the oldest; no dates, so a break never piles anything up
+    const picked = ui.cards.slice().sort((a, b) => a.box - b.box || a.seen - b.seen || a.at - b.at).slice(0, 5);
+    if (!picked.length) return;
+    ui.review = { ids: picked.map(c => c.id), i: 0, phase: 'ask', typed: '', got: 0 }; go('review');
+  },
+  'review-show'() { const inp = $('#review-input'); ui.review.typed = inp ? inp.value.trim() : ''; ui.review.phase = 'reveal'; render(); },
+  async 'review-ok'() { await gradeCard(true); },
+  async 'review-no'() { await gradeCard(false); },
   'explore-league'(b) { ui.exploreLeague = b.dataset.v; render(); },
   team(b) { if (ui.view !== 'team') ui.teamBack = ui.view; ui.teamId = b.dataset.id; go('team'); },
   'team-back'() { go(ui.teamBack || 'explore'); },
@@ -1096,7 +1209,7 @@ const ACTIONS = {
   },
   async export() {
     const hist = await Store.loadHistory();
-    const doc = { format: 'esports-club-english-save', version: 1, exportedAt: Date.now(), save: G, history: hist };
+    const doc = { format: 'esports-club-english-save', version: 1, exportedAt: Date.now(), save: G, history: hist, phrasebook: await Store.loadCards() };
     const text = JSON.stringify(doc, null, 1), name = 'esports-club-save-' + new Date().toISOString().slice(0, 10) + '.json';
     ui.notice = null; ui.exportText = null;
     try {
@@ -1109,14 +1222,15 @@ const ACTIONS = {
     render();
   },
   async 'import-yes'() {
-    const d = ui.importDoc; await Store.clearAll();
+    const d = ui.importDoc; await Store.clearAll({ keepCards: d.cards === null });
     G = upgradeSave(d.save); catchUpLeagues(); for (const h of d.history) await Store.addHistory(h);
+    if (d.cards) { ui.cards = []; for (const c of d.cards) { ui.cards.push(c); await Store.addCard(c); } }   // an older backup without a phrasebook leaves yours alone
     await persist(); ui.importDoc = null; ui.notice = { text: 'Backup restored.' }; ui.history = null; render();
   },
   'import-no'() { ui.importDoc = null; render(); },
   reset() { ui.confirmReset = true; render(); },
   'reset-no'() { ui.confirmReset = false; render(); },
-  async 'reset-yes'() { await Store.clearAll(); G = null; ui.confirmReset = false; ui.history = null; ui.view = 'club'; render(); },
+  async 'reset-yes'() { await Store.clearAll({ keepCards: true }); G = null; ui.confirmReset = false; ui.history = null; ui.view = 'club'; render(); },
   async selftestmin() {
     ui.selftestMin = { running: true, done: [] }; ui.checking = true; render();
     try {
@@ -1162,19 +1276,23 @@ function tickRing(s) {
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b && ACTIONS[b.dataset.act] && !b.disabled) ACTIONS[b.dataset.act](b); });
 document.addEventListener('input', e => {
   if (/^answer-\d+$/.test(e.target.id)) { ui.drafts[+e.target.id.slice(7)] = e.target.value; updateWc(); }
+  else if (e.target.id === 'pb-search') { ui.pbSearch = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#pb-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
   else if (e.target.id === 'club-search') { ui.search = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#club-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
   else if (e.target.id === 'call') {
     const s = ui.shot;
     if (s && s.started == null) { s.started = performance.now(); clearInterval(ui.callTimer); ui.callTimer = setInterval(() => tickRing(s), 100); }
   }
 });
-document.addEventListener('keydown', e => { if (e.target.id === 'call' && e.key === 'Enter') { e.preventDefault(); submitCall(); } });
+document.addEventListener('keydown', e => {
+  if (e.target.id === 'call' && e.key === 'Enter') { e.preventDefault(); submitCall(); }
+  else if (e.target.id === 'review-input' && e.key === 'Enter') { e.preventDefault(); ACTIONS['review-show'](); }
+});
 document.addEventListener('change', async e => {
   if (e.target.id !== 'import-file' || !e.target.files[0]) return;
   try {
     const doc = JSON.parse(await e.target.files[0].text());
     if (doc.format !== 'esports-club-english-save' || !doc.save || !TEAM[doc.save.clubId] || !Array.isArray(doc.history)) throw new Error('bad');
-    ui.importDoc = { save: doc.save, history: doc.history, exportedAt: doc.exportedAt || Date.now() }; ui.notice = null;
+    ui.importDoc = { save: doc.save, history: doc.history, exportedAt: doc.exportedAt || Date.now(), cards: Array.isArray(doc.phrasebook) ? doc.phrasebook.map(cleanCard).filter(Boolean) : null }; ui.notice = null;
   } catch (err) { ui.importDoc = null; ui.notice = { text: 'That file is not a backup from this game.', bad: true }; }
   render();
 });
@@ -1184,10 +1302,11 @@ document.addEventListener('toggle', e => { if (e.target.matches && e.target.matc
 (async function boot() {
   render();
   await Store.init();
+  ui.cards = await Store.loadCards();
   const saved = await Store.loadSave();
   if (saved && TEAM[saved.clubId]) { const old = saved.schema; G = upgradeSave(saved); const n0 = G.season.results.length; catchUpLeagues(); if (old !== G.schema || G.season.results.length !== n0) await persist(); Store.setStatus(Store.mode === 'cloud' ? 'Saved to your claude.ai account' : 'Saved on this device only'); go('club'); }
   else { Store.setStatus(Store.mode === 'cloud' ? 'Your save will be kept in your claude.ai account' : 'Your save will stay on this device'); go('club'); }
 })();
-if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, normItem, itemHtml, DIMS_LONG, ensureLeaguesTo, completeSeason, catchUpLeagues, ALL_LEAGUES, buildLongScene, shotRound, SHOT_GROUPS, PRESS_BANK, NEG_RENEW, NEG_OTHER, dueContractPlayer, applyContract, negYears, myResult, getG: () => G, setG: g => { G = g; } };   // set only by the local preview, for checks
+if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, normItem, itemHtml, DIMS_LONG, cleanCard, normPhrase, ensureLeaguesTo, completeSeason, catchUpLeagues, ALL_LEAGUES, buildLongScene, shotRound, SHOT_GROUPS, PRESS_BANK, NEG_RENEW, NEG_OTHER, dueContractPlayer, applyContract, negYears, myResult, getG: () => G, setG: g => { G = g; } };   // set only by the local preview, for checks
 })();
 </script>
