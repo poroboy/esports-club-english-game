@@ -1,0 +1,31 @@
+<script>
+/* PREVIEW ONLY: a fake Claude so the screens can be seen locally. The scores mean nothing. */
+(function () {
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const TQ = '"' + '"' + '"';
+  const quoted = p => p.split(TQ).filter((_, i) => i % 2 === 1).map(x => x.trim());
+  function item(text, dims) {
+    const words = text.split(/\s+/); const scores = {};
+    dims.forEach((d, i) => { scores[d] = 62 + ((text.length * (i + 3)) % 30); });
+    return {
+      scores,
+      corrected: text.replace(/\bwas\b/, 'were').replace(/\blose\b/, 'lost'),
+      meaning: 'This is a stub reply for the local preview.',
+      issues: words.length > 2 ? [{ span: words.slice(0, 2).join(' '), fix: words.slice(0, 2).join(' ') + ' (fixed)', reason: 'Stub reason: check the tense here.' }] : []
+    };
+  }
+  const sample = async function () { return { text: '{}' }; };
+  sample.json = async function (prompt) {
+    await wait(600);
+    if (prompt.indexOf('Translate into natural') === 0) {
+      return [1, 2, 3].map(n => ({ meaningTh: 'ข้อความไทยตัวอย่าง ' + n, reasonsTh: ['เหตุผลตัวอย่าง'] }));
+    }
+    const q = quoted(prompt);
+    if (prompt.indexOf('shot calls') > 0) {
+      return { results: q.map((t, i) => Object.assign({ n: i + 1 }, item(t, ['accuracy', 'relevance', 'naturalness']))), chunk: "Let's group ..." };
+    }
+    return Object.assign(item(q[q.length - 1] || 'No answer', ['accuracy', 'linking', 'development', 'relevance', 'naturalness']), { chunk: 'The main reason was that ...' });
+  };
+  window.claude = { use: async n => (n === 'sample' ? sample : n === 'downloads' ? { save: async () => ({ status: 'saved' }) } : null) };
+})();
+</script>
