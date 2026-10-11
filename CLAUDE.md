@@ -6,7 +6,7 @@ This is a personal English-practice game (a League of Legends esports club manag
 
 - Talk to me in Thai. Keep code, comments, game text and feedback text in English.
 - Before every task, tell me which Claude model and effort level to use, following "Stages and models" in the spec.
-- Build in stages. Finish and test one stage before starting the next. Current stage: **Stages 1a, 1b, 2 and 3 are done (data, rating rules v0.1, game page, match formula and season v0.1); next is Stage 4, the three scenes of version 1** (Sonnet 5.5, High). The LiquipediaDB placements are still open and need the user's API key.
+- Build in stages. Finish and test one stage before starting the next. Current stage: **Stages 1a, 1b, 2, 3 and 4 are built (data, rating rules v0.1, game page, match formula and season v0.1, the three scenes v0.1); version 1 is complete and waits for the play test and the two-week review.** The LiquipediaDB placements are still open and need the user's API key.
 - Never change data schemas (including the snapshot format in the spec) or the check-response shape without asking me first and explaining why.
 - When you change existing code, change only what the task needs and tell me what changed.
 - The game is one self-contained HTML file with no server. It is separate from my TOEIC app: no shared data.

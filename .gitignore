@@ -3,3 +3,4 @@ cache/
 __pycache__/
 .claude/settings.local.json
 game/preview.html
+.claude/launch.json

@@ -227,10 +227,12 @@ const WEIGHTS = {
   long: { accuracy: .30, linking: .20, development: .20, relevance: .20, naturalness: .10 },
   shot: { accuracy: .40, relevance: .40, naturalness: .20 }
 };
-const MIN_WORDS = { press: 15, negotiation: 20 };      // placeholder until Stage 4 sets the real minimum per scene
+const MIN_WORDS = { press: 25, negotiation: 45 };      // per answer; shotcalling has no minimum [TRIAL]
 const SPEED_FAST = 5, SPEED_SLOW = 25;                  // seconds: at or under FAST = full speed credit, at or over SLOW = none
 const SPEED_SHARE = 0.10;                               // speed can lift a correct call's score by up to 10%
 const EFFECT_STEPS = [[90, 6], [80, 4], [70, 3], [60, 2], [45, 1], [0, 0]]; // total score -> effect points; never negative
+const NEG_STEPS = [[80, 4], [60, 2], [0, 1]];       // negotiation: total -> morale points
+const NEG_YEARS = [[80, 3], [60, 2], [0, 1]];       // negotiation: total -> years added to the contract
 const EFFECT_TARGET = { press: 'reputation', negotiation: 'morale', shot: 'chemistry' };
 const VALUE_LABEL = { reputation: 'Club reputation', chemistry: 'Team chemistry', morale: 'Morale' };
 const GRADES = [[90, 'S'], [80, 'A'], [70, 'B'], [60, 'C'], [0, 'D']];   // display only; the score stays the number
@@ -354,13 +356,16 @@ let G = null;   // saved state: {schema, clubId, week, values, flow, snapshotDat
 const newSeed = () => Math.floor(Math.random() * 2147483647) + 1;
 const SEASON_YEAR = +SNAP.meta.snapshotDate.slice(0, 4);
 function newGame(clubId) {
-  return { schema: 2, clubId, week: 0, values: { reputation: 50, chemistry: 50, morale: 50 }, flow: { week: 0, longDone: false },
-    season: { year: SEASON_YEAR, seed: newSeed(), results: [] }, seasons: [], snapshotDate: SNAP.meta.snapshotDate, updatedAt: Date.now() };
+  const seed = newSeed();
+  return { schema: 3, clubId, week: 0, values: { reputation: 50, chemistry: 50, morale: 50 }, flow: { week: 0, longDone: false },
+    season: { year: SEASON_YEAR, seed, results: [] }, seasons: [], contracts: makeContracts(clubId, seed), snapshotDate: SNAP.meta.snapshotDate, updatedAt: Date.now() };
 }
-function upgradeSave(s) {   // schema 1 had only sample results: keep club, values and history, start a real season
-  if (s.schema >= 2 && s.season) return s;
-  s.schema = 2; s.week = 0; s.flow = { week: 0, longDone: false };
-  s.season = { year: SEASON_YEAR, seed: newSeed(), results: [] }; s.seasons = s.seasons || [];
+function upgradeSave(s) {   // schema 1 had only sample results, schema 2 had no contracts: keep club, values and history
+  if (!(s.schema >= 2 && s.season)) {
+    s.week = 0; s.flow = { week: 0, longDone: false }; s.season = { year: SEASON_YEAR, seed: newSeed(), results: [] }; s.seasons = s.seasons || [];
+  }
+  if (!s.contracts) s.contracts = makeContracts(s.clubId, s.season.seed);
+  s.schema = 3;
   return s;
 }
 function persist() { G.updatedAt = Date.now(); return Store.saveGame(G); }
@@ -427,33 +432,147 @@ function seasonResult() {
 const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14) ? 0 : (n % 10 < 4 ? n % 10 : 0)]);
 
 /* ---------------------------------------------------------------- scene content (placeholders, Stage 4 replaces them) */
-const SHOT_ROUNDS = [
-  ['The enemy jungler was last seen top side. Dragon spawns in 40 seconds.', 'Your bot laner is low on health and two enemies are diving bot.', 'Baron is up. Your team has no ultimate ready.'],
-  ['The enemy mid laner has disappeared from the map and you have no ward.', 'Your top laner is fighting two enemies in the side lane.', 'The enemy team starts Baron at 20:00. You are standing in mid.']
+/* ---- Stage 4: scene content. Every text is English at about B1; names come from the game state. Hints are hand-written (free, no check). */
+const SHOT_ORDER = ['objective', 'fight', 'vision', 'recovery'];
+const SHOT_GROUPS = {
+  objective: [
+    'Dragon spawns in 30 seconds. Your top laner is still in lane.',
+    'The enemy jungler was last seen top side. Dragon spawns in 40 seconds.',
+    'Baron is up. Your team has no ultimate ready.',
+    'The enemy team lost the bot tower. You can take the mid tower now.',
+    'The Herald is up and your jungler is on the other side of the map.',
+    'Your team is ahead by 3000 gold. Baron spawns in 20 seconds.'
+  ],
+  fight: [
+    'Two enemies are diving your bot laner. You are in mid.',
+    'The enemy ADC is alone and out of position.',
+    'Your tank is low on health and the enemy team is chasing.',
+    'A 5v5 fight starts in the river. Your support has no flash.',
+    'The enemy mid laner is out of mana at the front. Your team can engage.',
+    'Your jungler is dead and the enemy wants to fight at Dragon.'
+  ],
+  vision: [
+    'The enemy mid laner has disappeared from the map and you have no ward.',
+    'Your top laner is fighting two enemies in the side lane.',
+    'You see the enemy jungler in the bot bush. Your ADC is pushing.',
+    'The enemy support is placing wards in your jungle. Your jungler is nearby.',
+    'All five enemies are bot. Your top laner can take the tower.',
+    'Nobody has vision in the river and Baron spawns in 40 seconds.'
+  ],
+  recovery: [
+    'You lost two fights in a row and the enemy is ahead by 4000 gold.',
+    'Your team is behind and the enemy starts Baron.',
+    'Your ADC has no items and the enemy team is split pushing.',
+    'You are down two towers and the enemy has the Dragon soul.',
+    'Your top laner keeps dying in the same lane. The enemy jungler is camping there.',
+    'Your team is arguing in chat before a fight. You are the shotcaller.'
+  ]
+};
+function shotRound(week) {   // 3 situations, one from each of 3 groups; the groups rotate, so every group comes back every 4 weeks
+  const n = G.seasons.length * seasonWeeks() + week;   // counts on across seasons, so two weeks in a row never show the same situation
+  return [0, 1, 2].map(k => { const g = SHOT_ORDER[(n + k) % SHOT_ORDER.length], bank = SHOT_GROUPS[g]; return bank[(hash(G.clubId + g) + n) % bank.length]; });
+}
+
+/* press conference: 4 kinds of result x 2 versions x 2 questions = 16 questions */
+const PAST = 'past tenses', PERF = 'present perfect', COND = 'conditionals and modals', FUT = 'future forms';
+const PRESS_BANK = {
+  win20: [
+    [{ t: 'Congratulations on beating {opp} {score}. What was the key to the win?', h: ['The key was that ...', 'We won because ...'], s: PAST },
+     { t: 'You have won {w} of your {p} matches this season. What has changed since the start of the season?', h: ['Since the start of the season, we have ...', 'One thing that has changed is ...'], s: PERF, rec: true }],
+    [{ t: 'That was a dominant win over {opp}. How did you prepare for this match?', h: ['Before the match, we ...', 'During the week, we practised ...'], s: PAST },
+     { t: '{star} was excellent today. What has he done better recently?', h: ['Recently, he has ...', 'I think he has improved because ...'], s: PERF }]
+  ],
+  win21: [
+    [{ t: '{opp} took a game off you. What nearly went wrong?', h: ['We nearly lost because ...', 'In the game we lost, we ...'], s: PAST },
+     { t: 'How did the team stay calm in the deciding game?', h: ['We stayed calm because ...', 'Before the last game, our coach ...'], s: PAST }],
+    [{ t: 'It was a close match against {opp}. What did you change after they won a game?', h: ['After we lost the game, we ...', 'We changed our ... because ...'], s: PAST },
+     { t: 'What do you want to improve before the next match?', h: ['Before the next match, we want to ...', 'If we improve ..., we will ...'], s: FUT }]
+  ],
+  loss12: [
+    [{ t: 'You lost {score} to {opp}. What went wrong in the deciding game?', h: ['The deciding game was difficult because ...', 'We made a mistake when ...'], s: PAST },
+     { t: 'How do you feel about the team after this loss?', h: ['I feel ... because ...', 'Although we lost, I believe ...'], s: PERF }],
+    [{ t: 'It was close, but {opp} won. What would you do differently?', h: ['If we played again, we would ...', 'We should have ...'], s: COND },
+     { t: 'Some fans are worried about the team. What do you say to them?', h: ['I understand why ..., but ...', 'I want to tell them that ...'], s: PERF }]
+  ],
+  loss02: [
+    [{ t: 'That was a hard loss to {opp}. What went wrong today?', h: ['We lost because ...', 'I think the main problem was ...'], s: PAST },
+     { t: 'What will you say to your players tonight?', h: ['Tonight, I will tell them ...', 'I will ask them to ...'], s: FUT }],
+    [{ t: '{opp} won {score}. Were you surprised by their strategy?', h: ['Yes, I was surprised because ...', 'No, we expected it because ...'], s: PAST },
+     { t: 'What have you learned from your losses this season?', h: ['This season, we have learned that ...', 'One lesson is that ...'], s: PERF, rec: true }]
+  ]
+};
+const EARLY_Q2 = [
+  { t: 'It is early in the season. What are your goals for the year?', h: ['Our goal is to ...', 'This season, we hope to ...'], s: FUT },
+  { t: 'How do you feel about the start of the season?', h: ['So far, we have ...', 'I feel ... because ...'], s: PERF }
 ];
+function seasonRecord(week) {
+  let w = 0, l = 0;
+  G.season.results.forEach(r => {
+    if (r.w > week || (r.a !== G.clubId && r.b !== G.clubId)) return;
+    const mine = r.a === G.clubId; if ((mine ? r.ga : r.gb) > (mine ? r.gb : r.ga)) w++; else l++;
+  });
+  return { w, l, p: w + l };
+}
+const fill = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] == null ? '' : v[k]));
+function buildPress(week, m) {
+  const ver = (week + G.season.seed) % 2, rec = seasonRecord(week);
+  const kind = m.win ? (m.ga === 0 ? 'win20' : 'win21') : (m.gf === 0 ? 'loss02' : 'loss12');
+  const stars = lineup(G.clubId).starters.slice().sort((a, b) => RAT[b.id].overall - RAT[a.id].overall);
+  const vars = { opp: m.opp.name, score: m.score, star: stars[(week + G.season.seed) % 2].handle, w: rec.w, p: rec.p };
+  const pair = PRESS_BANK[kind][ver].map((q, i) => (i === 1 && q.rec && rec.p < 3 ? EARLY_Q2[ver] : q));
+  return { type: 'press', title: 'Press conference', room: 'Press room · after the match', speaker: 'Journalist', minWords: MIN_WORDS.press,
+    context: 'Match result: ' + TEAM[G.clubId].name + (m.win ? ' beat ' : ' lost to ') + m.opp.name + ' ' + m.score + ' (week ' + (week + 1) + ').',
+    qs: pair.map(q => ({ t: fill(q.t, vars), h: q.h, s: q.s })) };
+}
+
+/* negotiation: contract talks (the contract end years are invented by the game, not facts about the real players) */
+function makeContracts(clubId, seed) {
+  const c = {};
+  (BY_TEAM[clubId] || []).forEach(p => { c[p.id] = SEASON_YEAR + hash(seed + '|' + p.id) % 3; });
+  return c;
+}
+function dueContractPlayer() {
+  const due = lineup(G.clubId).starters.filter(p => !p.standin && (G.contracts[p.id] || 0) <= G.season.year);
+  return due.sort((a, b) => hash(G.season.seed + a.id) - hash(G.season.seed + b.id))[0] || null;
+}
+const NEG_RENEW = [
+  { sp: 'Agent', t: "{p}'s contract ends this season. His agent writes: \"{p} wants a higher salary and a three-year deal. What can you offer?\" Write your reply to the agent. Give your offer and your reasons.", h: ['We would be happy to offer ... if ...', 'Although we cannot ..., we can ...'] },
+  { sp: 'Agent', t: "{p} has played very well this year and other clubs are watching. His agent says: \"{p} wants a longer contract and a bonus for winning titles. How do you respond?\" Write your reply to the agent.", h: ['If {p} signs a longer contract, we could ...', 'We would agree to a bonus if ...'] },
+  { sp: 'Player', t: "{p}'s contract ends this season. He tells you: \"I like it here, but I want to know your plans for the team. What can you promise me if I sign again?\" Write your answer to {p}.", h: ['If you sign again, we will ...', 'We would like to ..., so ...'] }
+];
+const NEG_OTHER = [
+  { sp: 'Player', t: 'A rival club has offered {p} a bigger salary. You want him to stay. Write a message to {p} that explains why he should stay.', h: ['I believe you should stay because ...', 'If you stay, we will ...'] },
+  { sp: 'Player', t: '{p} comes to you and says: "I want more say in how the team plays. Can I lead our drafts?" Write your answer.', h: ['I would be happy to ... if ...', 'We could try ..., but ...'] },
+  { sp: 'Agent', t: "{p}'s agent writes: \"{p} wants a bonus if the team finishes in the top three. Would you agree?\" Write your reply.", h: ['If the team finishes in the top three, we would ...', 'We could agree if ...'] },
+  { sp: 'Player', t: '{p} says: "I need more rest days and a better practice schedule. Can you change the schedule?" Write your answer.', h: ['If we change the schedule, we would ...', 'I understand that ..., so we could ...'] },
+  { sp: 'Player', t: 'Your young substitute {b} says: "I want more game time. What do I need to do?" Write your answer to {b}.', h: ['If you want more game time, you should ...', 'You would play more if ...'], bench: true }
+];
+function buildNegotiation(week, m) {
+  const due = dueContractPlayer(), L = lineup(G.clubId), ver = Math.floor(week / 2) + G.season.seed;
+  let topic, p, renewal = false;
+  if (due) { p = due; renewal = true; topic = NEG_RENEW[hash(due.id) % NEG_RENEW.length]; }
+  else {
+    p = L.starters[(week + G.season.seed) % L.starters.length]; topic = NEG_OTHER[ver % NEG_OTHER.length];
+    if (topic.bench && !L.bench.length) topic = NEG_OTHER[(ver + 1) % NEG_OTHER.length];
+  }
+  const vars = { p: p.handle, b: (L.bench[0] || p).handle };
+  const ctx = renewal ? p.handle + "'s contract ends after season " + (G.contracts[p.id] || G.season.year) + '. A good deal can extend it by up to 3 years and lift morale.' : 'This talk can lift morale. Contract end dates stay as they are.';
+  return { type: 'negotiation', title: 'Contract negotiation', room: 'Contract desk · private', speaker: topic.sp, minWords: MIN_WORDS.negotiation,
+    context: (m ? '' : 'Bye week: no match, so you talk contracts instead of facing the press. ') + ctx,
+    renewal, playerId: p.id, playerHandle: p.handle, target: COND,
+    qs: [{ t: fill(topic.t, vars), h: topic.h.map(x => fill(x, vars)), s: COND }] };
+}
 function buildLongScene(week) {
   const m = myResult(week);                                   // null in a bye week
-  const type = m && week % 2 === 0 ? 'press' : 'negotiation';
-  const v = Math.floor(week / 2) % 2;
-  const stars = lineup(G.clubId).starters;
-  const p = stars[week % stars.length];
-  if (type === 'press') {
-    const loss = [
-      ['You lost ' + m.score + ' to ' + m.opp.name + '. What went wrong today?', ['We lost because ...', 'I think the main problem was ...']],
-      ['Some fans say the team is under pressure after the loss to ' + m.opp.name + '. How do you respond?', ['I understand why ..., but ...', 'Although we lost, ...']]
-    ];
-    const win = [
-      ['Congratulations on beating ' + m.opp.name + ' ' + m.score + '. What was the key to the win?', ['The key was that ...', 'We won because ...']],
-      [p.handle + ' played very well today. What has changed for him this season?', ['Since the start of the season, he has ...', 'I think he has improved because ...']]
-    ];
-    const pick = (m.win ? win : loss)[v];
-    return { type, title: 'Press conference', room: 'Press room · after the match', speaker: 'Journalist', context: 'Match result: ' + TEAM[G.clubId].name + (m.win ? ' beat ' : ' lost to ') + m.opp.name + ' ' + m.score + ' (week ' + (week + 1) + ').', prompt: pick[0], hints: pick[1], minWords: MIN_WORDS.press };
-  }
-  const neg = [
-    [p.handle + "'s contract ends this season. His agent writes: \"" + p.handle + ' wants a higher salary and a three-year deal. What can you offer?" Write your reply to the agent. Give your offer and your reasons.', ['We would be happy to offer ... if ...', 'Although we cannot ..., we can ...']],
-    ['A rival club has offered ' + p.handle + ' a bigger salary. You want him to stay. Write a message to ' + p.handle + ' that explains why he should stay.', ['I believe you should stay because ...', 'If you stay, we will ...']]
-  ][v];
-  return { type, title: 'Contract negotiation', room: 'Contract desk · private', speaker: 'Situation', context: m ? 'Test scene. Real contract data arrives in a later stage.' : 'Bye week: no match this week, so you talk contracts instead of facing the press.', prompt: neg[0], hints: neg[1], minWords: MIN_WORDS.negotiation };
+  const sc = m && week % 2 === 0 ? buildPress(week, m) : buildNegotiation(week, m);
+  sc.prompt = sc.qs[0].t;                                     // the single-answer check reads scene.prompt
+  return sc;
+}
+const negYears = total => (NEG_YEARS.find(s => total >= s[0]) || [0, 1])[1];
+function applyContract(sc, entry) {
+  if (!sc.renewal) { entry.contract = null; return; }
+  const years = negYears(entry.total), until = Math.max(G.contracts[sc.playerId] || G.season.year, G.season.year) + years;
+  G.contracts[sc.playerId] = until; entry.contract = { handle: sc.playerHandle, years, until };
 }
 
 /* ---------------------------------------------------------------- Claude check */
@@ -467,11 +586,28 @@ const COMMON_RULES = [
   '"issues": one entry per real mistake, most important first, at most 6, or [] if there is none. "span" must be words copied exactly from the player text. "fix" is the correct form. "reason" is one short sentence in simple English.',
   '"chunk": one sentence starter of 3 to 6 words ending in "..." that would suit this situation.'
 ].join('\n');
+const LONG_DIMS = 'Score each dimension from 0 to 100:\n- accuracy: grammar, tense, word choice\n- linking: correct use of connecting words (because, although, so, however) and clause structure\n- development: length and quality of ideas, reasons and examples\n- relevance: answers what was asked\n- naturalness: sounds like a real person in this situation\n\n';
+const LONG_RULES = 'Scoring rules:\n1. If an answer has fewer words than the minimum, linking and development must not be above 40.\n2. Never punish a harder structure that is partly wrong. When it is partly wrong, accuracy falls by the amount of the errors, but linking and development are scored on what the player attempted. The total must stay above that of a fully correct one-clause answer.\n\n';
+const targetLine = scene => (scene.target ? '\nTarget structures for this scene: ' + scene.target + '. The game wants the player to practise them. Never punish other correct structures.' : '');
 function promptLong(scene, answer, minWords) {
-  return 'You check answers in an English-practice game about managing an esports club.\n\nScene: ' + scene.title + '\nSituation: ' + scene.prompt + '\n\nPlayer answer (' + wordCount(answer) + ' words; minimum for this scene: ' + minWords + ' words):\n"""\n' + answer + '\n"""\n\n' +
-    'Score each dimension from 0 to 100:\n- accuracy: grammar, tense, word choice\n- linking: correct use of connecting words (because, although, so, however) and clause structure\n- development: length and quality of ideas, reasons and examples\n- relevance: answers what was asked\n- naturalness: sounds like a real person in this situation\n\n' +
-    'Scoring rules:\n1. If the answer has fewer words than the minimum, linking and development must not be above 40.\n2. Never punish a harder structure that is partly wrong. When it is partly wrong, accuracy falls by the amount of the errors, but linking and development are scored on what the player attempted. The total must stay above that of a fully correct one-clause answer.\n\n' +
-    COMMON_RULES + '\n\nReply with only one JSON object in this shape:\n' + REPLY_LONG;
+  return 'You check answers in an English-practice game about managing an esports club.\n\nScene: ' + scene.title + '\nSituation: ' + scene.prompt + targetLine(scene) + '\n\nPlayer answer (' + wordCount(answer) + ' words; minimum for this scene: ' + minWords + ' words):\n"""\n' + answer + '\n"""\n\n' +
+    LONG_DIMS + LONG_RULES + COMMON_RULES + '\n\nReply with only one JSON object in this shape:\n' + REPLY_LONG;
+}
+const REPLY_MULTI = '{"results":[{"n":1,"scores":{"accuracy":0,"linking":0,"development":0,"relevance":0,"naturalness":0},"corrected":"...","meaning":"...","issues":[{"span":"...","fix":"...","reason":"..."}]},{"n":2,"...":"..."}],"chunk":"..."}';
+function promptMulti(scene, answers) {
+  const lines = scene.qs.map((q, i) => (i + 1) + '. Question: ' + q.t + '\n   Target structures: ' + q.s + ' (practice only; never punish other correct structures)\n   Player answer (' + wordCount(answers[i]) + ' words; minimum for each answer: ' + scene.minWords + ' words):\n   """' + answers[i] + '"""').join('\n');
+  return 'You check answers in an English-practice game about managing an esports club.\n\nScene: ' + scene.title + ' (' + answers.length + ' questions; check each answer on its own)\n\n' + lines + '\n\n' +
+    LONG_DIMS + LONG_RULES + COMMON_RULES + '\n"corrected", "meaning" and "issues" are given for each answer. "chunk" is one for the whole scene.\n\nReply with only one JSON object in this shape:\n' + REPLY_MULTI;
+}
+async function checkMulti(scene, answers, signal) {
+  const r = await askJson(promptMulti(scene, answers), signal);
+  if (!r || !Array.isArray(r.results) || r.results.length < answers.length) throw bad();
+  const items = answers.map((a, i) => {
+    const it = normItem(r.results[i], DIMS_LONG, a);
+    it.situation = scene.qs[i].t; it.total = Math.round(weighted(it.scores, WEIGHTS.long));
+    return it;
+  });
+  return { items, chunk: str(r.chunk), total: Math.round(items.reduce((s, x) => s + x.total, 0) / items.length) };
 }
 function promptShot(situations, answers) {
   const lines = situations.map((s, i) => (i + 1) + '. Situation: ' + s + '\n   Player call: """' + answers[i] + '"""').join('\n');
@@ -536,7 +672,7 @@ const ERR_COPY = {
 const errCopy = e => ERR_COPY[e && e.code] || 'The check did not work. Your answer is kept. Try again. No effect was applied.';
 
 /* ---------------------------------------------------------------- UI state */
-const ui = { view: 'boot', filter: 'All', search: '', pending: null, draft: '', hint: false, checking: false, error: null, result: null, ctl: null, startedAt: 0, shot: null, history: null, importDoc: null, confirmReset: false, selftest: null, expand: {}, summary: null };
+const ui = { view: 'boot', filter: 'All', search: '', pending: null, drafts: [], hints: [], shortWarn: false, selftestMin: null, checking: false, error: null, result: null, ctl: null, startedAt: 0, shot: null, history: null, importDoc: null, confirmReset: false, selftest: null, expand: {}, summary: null };
 const app = $('#app');
 function go(view) { ui.view = view; ui.error = null; render(); window.scrollTo(0, 0); }
 const valueMeter = (k, now, before) => {
@@ -566,7 +702,7 @@ function pickerConfirm() {
 /* ---------- club hub */
 function playerCard(p, sub) {
   const r = RAT[p.id];
-  return `<details class="pcard r-${rarity(r.overall)} ${sub ? 'bench' : ''}"><summary><span class="ov">${r.overall}</span><span class="role">${sub ? 'Sub · ' : ''}${ROLE_LABEL[p.role] || ''}</span><span class="hdl">${esc(p.handle)}</span><span class="meta mono">${esc(p.nationality || '--')} · age ${r.age == null ? '?' : r.age}</span></summary>${playerDetail(p)}</details>`;
+  return `<details class="pcard r-${rarity(r.overall)} ${sub ? 'bench' : ''}"><summary><span class="ov">${r.overall}</span><span class="role">${sub ? 'Sub · ' : ''}${ROLE_LABEL[p.role] || ''}</span><span class="hdl">${esc(p.handle)}</span><span class="meta mono">${esc(p.nationality || '--')} · age ${r.age == null ? '?' : r.age}${G && G.contracts && G.contracts[p.id] ? ' · to ' + G.contracts[p.id] : ''}</span></summary>${playerDetail(p)}</details>`;
 }
 function playerDetail(p) {
   const r = RAT[p.id], w = r.why;
@@ -636,25 +772,35 @@ function flowHeader(step) {
   return `<div class="row spread"><div class="dots" aria-label="Match day progress"><i class="on"></i><i class="${step >= 1 ? 'on' : ''}"></i></div><span class="label">Week ${G.week + 1} · scene ${step + 1} of 2</span></div>`;
 }
 function viewLong() {
-  const sc = ui.scene;
-  const initial = sc.speaker.slice(0, 1);
+  const sc = ui.scene, initial = sc.speaker.slice(0, 1), multi = sc.qs.length > 1;
+  const blocks = sc.qs.map((q, i) => `
+    <div class="talk"><div class="avatar" aria-hidden="true">${esc(initial)}</div><div><div class="who">${esc(sc.speaker)}${multi ? ' · question ' + (i + 1) + ' of ' + sc.qs.length : ''}</div><div class="bubble">${esc(q.t)}</div>${i === 0 ? '<p class="small muted" style="margin-top:8px">' + esc(sc.context) + '</p>' : ''}</div></div>
+    <div class="you-row"><div class="you-col"><div class="who">You · head coach</div>
+      <div class="bubble you"><textarea id="answer-${i}" ${ui.checking ? 'disabled' : ''} placeholder="Write your answer. Link your ideas with because, although, so, however.">${esc(ui.drafts[i])}</textarea></div>
+      <div class="wcbar"><span class="seg" id="wcseg-${i}"><i style="width:0%"></i></span><span class="muted" id="wc-${i}"></span><span class="grow"></span><button class="btn quiet" data-act="hint" data-i="${i}" ${ui.checking ? 'disabled' : ''}>${ui.hints[i] ? 'Hide hint' : 'Hint'}</button></div>
+      ${ui.hints[i] ? `<div class="panel flat small"><strong>Starters you can continue:</strong><ul style="margin:6px 0 0;padding-left:20px">${q.h.map(h => '<li>' + esc(h) + '</li>').join('')}</ul></div>` : ''}</div></div>`).join('');
   return `<div class="stage">${flowHeader(0)}
     <div class="row spread"><span class="onair"><i></i>${esc(sc.room)}</span><span class="small muted">${esc(sc.title)}</span></div>
-    <div class="talk"><div class="avatar" aria-hidden="true">${esc(initial)}</div><div><div class="who">${esc(sc.speaker)}</div><div class="bubble">${esc(sc.prompt)}</div><p class="small muted" style="margin-top:8px">${esc(sc.context)}</p></div></div>
-    <div class="you-row"><div class="you-col"><div class="who">You · head coach</div>
-      <div class="bubble you"><textarea id="answer" ${ui.checking ? 'disabled' : ''} placeholder="Write your answer. Link your ideas with because, although, so, however.">${esc(ui.draft)}</textarea></div>
-      <div class="wcbar"><span class="seg" id="wcseg"><i style="width:0%"></i></span><span class="muted" id="wc"></span><span class="grow"></span><button class="btn quiet" data-act="hint" ${ui.checking ? 'disabled' : ''}>${ui.hint ? 'Hide hint' : 'Hint'}</button></div>
-      ${ui.hint ? `<div class="panel flat small"><strong>Starters you can continue:</strong><ul style="margin:6px 0 0;padding-left:20px">${sc.hints.map(h => '<li>' + esc(h) + '</li>').join('')}</ul></div>` : ''}
-      ${checkBar(sc.type === 'press' ? 'Send answer' : 'Send reply', 'check-long')}</div></div></div>`;
+    ${blocks}
+    ${ui.shortWarn ? shortWarning() : checkBar(sc.type === 'press' ? 'Send answers' : 'Send reply', 'check-long')}</div>`;
+}
+function shortWarning() {
+  const sc = ui.scene;
+  const short = ui.drafts.map((a, i) => wordCount(a) < sc.minWords ? (sc.qs.length > 1 ? 'Answer ' + (i + 1) + ': ' : '') + wordCount(a) + ' of ' + sc.minWords + ' words' : null).filter(Boolean);
+  return `<div class="notice" role="alert"><strong>Short answer.</strong> ${esc(short.join(' · '))}. Longer answers can score higher on linking and development. You can still send it.</div><div class="row"><button class="btn" data-act="send-anyway">Send anyway</button><button class="btn quiet" data-act="keep-writing">Keep writing</button></div>`;
 }
 function checkBar(label, act) {
   if (ui.checking) return '<div class="row"><span class="muted"><span class="spinner"></span>Claude is checking <span class="mono" id="elapsed">0s</span></span><button class="btn quiet" data-act="stop">Stop</button></div>';
   return (ui.error ? '<div class="notice bad" role="alert">' + esc(ui.error) + '</div>' : '') + '<div class="row"><button class="btn" data-act="' + act + '">' + label + '</button><span class="small muted">Uses your own Claude usage. Your answer is kept if the check fails.</span></div>';
 }
 function updateWc() {
-  const el = $('#wc'); if (!el) return; const n = wordCount(ui.draft), m = ui.scene.minWords;
-  el.textContent = n + ' words · aim for ' + m + '+' + (n >= m ? ' ✓' : '');
-  const s = $('#wcseg i'); if (s) s.style.width = clamp(Math.round(100 * n / m), 0, 100) + '%';
+  const sc = ui.scene, m = sc.minWords;
+  sc.qs.forEach((_, i) => {
+    const el = $('#wc-' + i); if (!el) return;
+    const n = wordCount(ui.drafts[i]);
+    el.textContent = n + ' words · aim for ' + m + '+' + (n >= m ? ' ✓' : '');
+    const s = $('#wcseg-' + i + ' i'); if (s) s.style.width = clamp(Math.round(100 * n / m), 0, 100) + '%';
+  });
 }
 function viewShot() {
   const s = ui.shot;
@@ -700,6 +846,7 @@ function viewFeedback(entry, opts) {
     <section class="report"><div class="grade g-${g}" aria-label="Grade ${g}">${g}</div>
       <div><div class="label">${esc(entry.title)} report${opts.history ? ' · week ' + (entry.week + 1) : ''}</div><div class="big"><span data-count="${entry.total}">${entry.total}</span><small> / 100</small></div></div>
       <div class="burst">${eff.delta > 0 ? '+' + eff.delta + ' ' + esc(VALUE_LABEL[eff.target]) : 'No change to ' + esc(VALUE_LABEL[eff.target].toLowerCase())}</div></section>
+    ${entry.contract ? '<div class="panel flat"><div class="label">Contract</div><p>' + esc(entry.contract.handle) + ' signs for ' + entry.contract.years + (entry.contract.years === 1 ? ' more year' : ' more years') + ', until ' + entry.contract.until + '.</p></div>' : ''}
     ${entry.items.map((it, n) => itemHtml(it, dims, entry.items.length > 1 ? n : (it.situation ? 0 : null), entry.thai)).join('')}
     ${entry.chunk ? '<div class="panel flat"><div class="label">A chunk to keep</div><p style="font-size:18px;margin-top:4px">' + esc(entry.chunk) + '</p></div>' : ''}
     ${ui.error && !opts.history ? '<div class="notice bad" role="alert">' + esc(ui.error) + '</div>' : ''}
@@ -725,7 +872,8 @@ function viewSave() {
   return '<div class="stack"><h2>Save</h2><div class="panel stack"><p>' + esc(where) + '</p><p class="small muted">The game saves by itself after every step. A backup file protects you if the page is ever republished as a new artifact.</p>' +
     '<div class="row"><button class="btn" data-act="export">Export backup</button><label class="btn secondary" for="import-file" style="cursor:pointer">Import backup</label><input type="file" id="import-file" accept=".json,application/json" hidden></div>' + (ui.exportText ? '<div class="stack" style="gap:6px"><p class="small muted">Downloads are not available here. Copy this text into a .json file:</p><textarea readonly id="export-text" style="min-height:90px">' + esc(ui.exportText) + '</textarea></div>' : '') + (ui.notice ? '<div class="notice ' + (ui.notice.bad ? 'bad' : 'good') + '" role="status">' + esc(ui.notice.text) + '</div>' : '') + importPanel() + '</div>' +
     '<div class="panel stack"><h3>Start again</h3>' + (ui.confirmReset ? '<p>This deletes your club, week, values and the whole history. It cannot be undone.</p><div class="row"><button class="btn danger" data-act="reset-yes">Delete everything</button><button class="btn quiet" data-act="reset-no">Keep my save</button></div>' : '<div class="row"><button class="btn danger" data-act="reset">Delete save and start again</button></div>') + '</div>' +
-    '<div class="panel stack"><h3>Scoring self-test</h3><p class="small muted">Sends three sample answers to Claude and checks that a harder structure with some mistakes still scores above a plain correct one-clause answer (spec, scoring rule 2). Uses 3 checks.</p><div class="row"><button class="btn secondary" data-act="selftest" ' + (ui.checking ? 'disabled' : '') + '>Run the test</button></div>' + selftestHtml() + '</div></div>';
+    '<div class="panel stack"><h3>Scoring self-test</h3><p class="small muted">Sends three sample answers to Claude and checks that a harder structure with some mistakes still scores above a plain correct one-clause answer (spec, scoring rule 2). Uses 3 checks.</p><div class="row"><button class="btn secondary" data-act="selftest" ' + (ui.checking ? 'disabled' : '') + '>Run the test</button></div>' + selftestHtml() + '</div>' +
+    '<div class="panel stack"><h3>Minimum-length test</h3><p class="small muted">Sends one short and one long version of the same answer (minimum 25 words) and checks that the short one cannot score high on linking and development (scoring rule 1). Uses 2 checks.</p><div class="row"><button class="btn secondary" data-act="selftestmin" ' + (ui.checking ? 'disabled' : '') + '>Run the test</button></div>' + selftestMinHtml() + '</div></div>';
 }
 function importPanel() {
   const d = ui.importDoc; if (!d) return '';
@@ -735,6 +883,19 @@ const SELFTEST = {
   scene: { title: 'Press conference', prompt: 'Journalist: You lost 1-2 to Dplus. What went wrong today?', minWords: 0 },
   answers: [['A. Plain, fully correct, one clause', 'We played badly today.'], ['B. Harder structure, partly wrong', 'Although we was ahead in the early game, we lose the fights because our communication were not good.'], ['C. Very short', 'Bad game.']]
 };
+const SELFTEST_MIN = {
+  scene: { title: 'Press conference', prompt: 'You lost 1-2 to Dplus. What went wrong today?', minWords: 25 },
+  short: 'We lost because we played badly.',
+  long: 'We lost because we played badly in the early game, and our communication was poor, so we could not win the team fights. However, we have learned from this match, and we will practise our fights this week.'
+};
+function selftestMinHtml() {
+  const s = ui.selftestMin; if (!s) return '';
+  if (s.running) return '<p><span class="spinner"></span>Running check ' + (s.done.length + 1) + ' of 2…</p>';
+  if (s.error) return '<div class="notice bad">' + esc(s.error) + '</div>';
+  const [S, L] = s.done;
+  const t = [[S.scores.linking <= 40, 'Short answer: linking capped at 40 or less (' + S.scores.linking + ')'], [S.scores.development <= 40, 'Short answer: development capped at 40 or less (' + S.scores.development + ')'], [L.total > S.total, 'Long answer total above the short one (' + L.total + ' vs ' + S.total + ')']];
+  return '<ul style="margin:6px 0 0;padding-left:20px">' + t.map(x => '<li class="' + (x[0] ? 'check-ok' : 'check-bad') + '">' + (x[0] ? 'PASS ' : 'FAIL ') + esc(x[1]) + '</li>').join('') + '</ul>';
+}
 function selftestHtml() {
   const s = ui.selftest; if (!s) return '';
   if (s.running) return '<p><span class="spinner"></span>Running check ' + (s.done.length + 1) + ' of 3…</p>';
@@ -792,7 +953,7 @@ function startElapsed() {
   ui.elTimer = setInterval(() => { const el = $('#elapsed'); if (el) el.textContent = Math.floor((Date.now() - ui.startedAt) / 1000) + 's'; else clearInterval(ui.elTimer); }, 500);
 }
 function makeEntry(kind, title, res, target) {
-  const delta = effectFor(res.total);
+  const delta = target === 'morale' ? NEG_STEPS.find(x => res.total >= x[0])[1] : effectFor(res.total);
   const entry = { id: 'h-' + Date.now(), at: Date.now(), week: G.week, year: G.season.year, kind, title, items: res.items, total: res.total, chunk: res.chunk, effect: { target, delta }, thai: null };
   G.values[target] = clamp(G.values[target] + delta, 0, 100);
   return entry;
@@ -801,6 +962,20 @@ async function runCheck(fn, onOk) {
   ui.checking = true; ui.error = null; ui.ctl = new AbortController(); render(); startElapsed();
   try { const res = await fn(ui.ctl.signal); ui.checking = false; ui.ctl = null; await onOk(res); }
   catch (e) { ui.checking = false; ui.ctl = null; if (!(e && e.code === 'cancelled')) ui.error = errCopy(e); render(); }
+}
+function sendLong(force) {
+  const sc = ui.scene, answers = ui.drafts.map(a => a.trim());
+  if (answers.some(a => !a)) { ui.shortWarn = false; ui.error = answers.length > 1 ? 'Write an answer to each question first.' : 'Write your answer first.'; render(); return; }
+  if (!force && answers.some(a => wordCount(a) < sc.minWords)) { ui.shortWarn = true; ui.error = null; render(); return; }   // a short answer is warned about, never blocked
+  ui.shortWarn = false;
+  runCheck(sig => sc.qs.length > 1 ? checkMulti(sc, answers, sig) : checkLong(sc, answers[0], sig), async res => {
+    const entry = makeEntry('long', sc.title, res, EFFECT_TARGET[sc.type]);
+    entry.items.forEach((it, i) => { it.situation = sc.qs[i].t; });
+    if (sc.type === 'negotiation') applyContract(sc, entry);
+    G.flow = { week: G.week, longDone: true, startValues: G.flow.startValues, long: { title: sc.title, total: entry.total, delta: entry.effect.delta, target: entry.effect.target } };
+    await Store.addHistory(entry); await persist();
+    ui.result = entry; go('feedback-long');
+  });
 }
 const ACTIONS = {
   nav(b) { ui.exportText = null; ui.notice = null; ui.confirmReset = false; if (b.dataset.v === 'history') ui.history = null; go(b.dataset.v); },
@@ -816,26 +991,19 @@ const ACTIONS = {
     if (G.flow.longDone) return beginShot();
     go('match');
   },
-  'to-long'() { ui.scene = buildLongScene(G.week); ui.draft = ''; ui.hint = false; go('long'); },
+  'to-long'() { ui.scene = buildLongScene(G.week); ui.drafts = ui.scene.qs.map(() => ''); ui.hints = ui.scene.qs.map(() => false); ui.shortWarn = false; go('long'); },
   async 'new-season'() {
     const r = seasonResult();
     G.seasons.push({ year: G.season.year, champion: r.champion, finish: r.finish, wins: r.wins, losses: r.losses });
     G.season = { year: G.season.year + 1, seed: newSeed(), results: [] }; G.week = 0; G.flow = { week: 0, longDone: false };
+    Object.keys(G.contracts).forEach(k => { if (G.contracts[k] < G.season.year) G.contracts[k] = G.season.year; });   // nobody leaves in version 1
     await persist(); go('club');
   },
-  hint() { ui.hint = !ui.hint; render(); },
+  hint(b) { const i = +b.dataset.i || 0; ui.hints[i] = !ui.hints[i]; render(); },
+  'keep-writing'() { ui.shortWarn = false; render(); },
+  'send-anyway'() { sendLong(true); },
   stop() { if (ui.ctl) ui.ctl.abort(); },
-  'check-long'() {
-    const answer = ui.draft.trim();
-    if (!answer) { ui.error = 'Write your answer first.'; render(); return; }
-    const sc = ui.scene;
-    runCheck(sig => checkLong(sc, answer, sig), async res => {
-      const entry = makeEntry('long', sc.title, res, EFFECT_TARGET[sc.type]); entry.items[0].situation = sc.prompt;
-      G.flow = { week: G.week, longDone: true, startValues: G.flow.startValues, long: { title: sc.title, total: entry.total, delta: entry.effect.delta, target: entry.effect.target } };
-      await Store.addHistory(entry); await persist();
-      ui.result = entry; go('feedback-long');
-    });
-  },
+  'check-long'() { sendLong(false); },
   'to-shot'() { beginShot(); },
   'next-call'() { submitCall(); },
   'check-shot'() {
@@ -889,6 +1057,17 @@ const ACTIONS = {
   reset() { ui.confirmReset = true; render(); },
   'reset-no'() { ui.confirmReset = false; render(); },
   async 'reset-yes'() { await Store.clearAll(); G = null; ui.confirmReset = false; ui.history = null; ui.view = 'club'; render(); },
+  async selftestmin() {
+    ui.selftestMin = { running: true, done: [] }; ui.checking = true; render();
+    try {
+      for (const t of [SELFTEST_MIN.short, SELFTEST_MIN.long]) {
+        const r = await checkLong(SELFTEST_MIN.scene, t, undefined, SELFTEST_MIN.scene.minWords);
+        ui.selftestMin.done.push(r.items[0]); render();
+      }
+      ui.selftestMin.running = false;
+    } catch (e) { ui.selftestMin = { error: errCopy(e) }; }
+    ui.checking = false; render();
+  },
   async selftest() {
     ui.selftest = { running: true, done: [] }; ui.checking = true; render();
     try {
@@ -902,7 +1081,7 @@ const ACTIONS = {
   }
 };
 function beginShot() {
-  const situations = SHOT_ROUNDS[G.week % SHOT_ROUNDS.length];
+  const situations = shotRound(G.week);
   ui.shot = { situations, answers: [], secs: [], idx: 0, started: null, review: false, results: null }; ui.error = null; go('shot');
 }
 function submitCall() {
@@ -922,7 +1101,7 @@ function tickRing(s) {
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-act]'); if (b && ACTIONS[b.dataset.act] && !b.disabled) ACTIONS[b.dataset.act](b); });
 document.addEventListener('input', e => {
-  if (e.target.id === 'answer') { ui.draft = e.target.value; updateWc(); }
+  if (/^answer-\d+$/.test(e.target.id)) { ui.drafts[+e.target.id.slice(7)] = e.target.value; updateWc(); }
   else if (e.target.id === 'club-search') { ui.search = e.target.value; const pos = e.target.selectionStart; render(); const n = $('#club-search'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
   else if (e.target.id === 'call') {
     const s = ui.shot;
@@ -949,6 +1128,6 @@ document.addEventListener('toggle', e => { if (e.target.matches && e.target.matc
   if (saved && TEAM[saved.clubId]) { const old = saved.schema; G = upgradeSave(saved); if (old !== G.schema) await persist(); Store.setStatus(Store.mode === 'cloud' ? 'Saved to your claude.ai account' : 'Saved on this device only'); go('club'); }
   else { Store.setStatus(Store.mode === 'cloud' ? 'Your save will be kept in your claude.ai account' : 'Your save will stay on this device'); go('club'); }
 })();
-if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, setG: g => { G = g; } };   // set only by the local preview, for checks
+if (window.__ECG_TEST) window.__ecg = { roundRobin, playMatch, standings, scheduleFor, lineup, strength, modifier, Z, TEAM, SNAP, RAT, upgradeSave, newGame, buildLongScene, shotRound, SHOT_GROUPS, PRESS_BANK, NEG_RENEW, NEG_OTHER, dueContractPlayer, applyContract, negYears, myResult, getG: () => G, setG: g => { G = g; } };   // set only by the local preview, for checks
 })();
 </script>

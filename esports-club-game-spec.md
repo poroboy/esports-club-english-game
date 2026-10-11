@@ -68,6 +68,15 @@ Target session length: 5 to 10 minutes, which is one turn as described above. **
 
 Shotcalling timing **[TRIAL]**: the game times only the typing of each call, on the player's own device. The time Claude needs for the check is not counted. The 3 calls of a round are sent to Claude in one request when the round ends, which saves waiting time and usage.
 
+### Version 1 scene rules (Stage 4, approved 2026-10-11) **[TRIAL]**
+
+Full text: `docs/scenes-draft.md`. Code: `game/template.html` (scene content section).
+
+- **Press conference:** 2 questions per conference (a question about the result, then a follow-up), 16 questions in 8 pairs by kind of result (win 2-0, win 2-1, loss 1-2, loss 0-2). Both answers go to Claude in one request. Target structures named to Claude: past tenses, present perfect, future forms, conditionals; other correct structures are never punished. In a bye week the match day plays the negotiation instead.
+- **Negotiation:** one reply to a player or an agent; 3 topics when a starter's contract ends this season, 5 other topics (rival offer, role, bonus, conditions, a young substitute). Target structures: conditionals and modals. Contract end years are invented by the game and are not facts about the real players (save schema 3, `contracts`). Outcome by total score: 80 or more adds 3 years and morale +4; 60 to 79 adds 2 years and +2; below 60 adds 1 year and +1. Nobody leaves in version 1.
+- **Shotcalling:** 24 situations in 4 groups (objective, fight, vision, recovery); a round takes 3 situations from 3 groups, the groups rotate and the situation index counts on across seasons, so two weeks in a row never repeat a situation.
+- **Hint button** (long scenes): 2 hand-written starter chunks per question, free, no check request. Shotcalling has no hints.
+
 ### Later
 
 Scouting interview and academy deals, sponsor negotiation, investor letter and funding pitch (stocks), crisis scenes (losing streak, conflict between players), social media posts and fan replies.
@@ -95,7 +104,7 @@ Shotcalling also scores speed. The game measures speed itself, and a faster corr
 
 Rules
 
-1. Long-form scenes have a minimum development level. A shorter answer caps the Linking and Development scores, so "Yes, I like it" cannot win. **[OPEN: exact minimum per scene, decided in Stage 4]**
+1. Long-form scenes have a minimum development level. A shorter answer caps the Linking and Development scores, so "Yes, I like it" cannot win. Minimum per answer **[TRIAL]** (Stage 4, approved 2026-10-11): press conference 25 words, negotiation 45 words, shotcalling none. The game counts the words and tells Claude; below the minimum Linking and Development are capped at 40. The game warns before sending a short answer and never blocks it.
 2. Harder structures **[TRIAL]**: the player is never punished for trying a harder structure and getting it partly wrong. When a harder structure is partly wrong, Accuracy falls by the amount of the errors, but Linking and Development are scored on what the player attempted. The total must stay above that of a fully correct one-clause answer. This rule goes into Claude's scoring instructions and is tested with sample answers in Stage 2.
 3. A fully correct answer gives the largest effect. A partly correct answer gives a smaller one, and the effect falls step by step.
 
@@ -139,6 +148,8 @@ Proposed response shape (final shape **[OPEN]**, decided in Stage 2; Claude retu
   ]
 }
 ```
+
+Answers to several questions of one scene (the press conference, 2 questions) use the shotcalling shape with the five long-scene scores: `{ "results": [ { "n": 1, "scores": {...5...}, "corrected", "meaning", "issues": [...] }, { "n": 2, ... } ], "chunk": "..." }`. A single answer keeps the shape above (Stage 4, approved 2026-10-11).
 
 Failure handling: a check that fails or is refused shows a short message, is not retried automatically, and costs the player nothing.
 
@@ -310,7 +321,7 @@ Academy, stocks, aging and retirement, rival personalities, end-of-season rankin
 2. ~~Player rating rules (Stage 1b).~~ Done as v0.1 on 2026-10-11 (see "Player ratings"); the results term waits for LiquipediaDB data and the rules are reviewed with the **[TRIAL]** items.
 3. Final check-response shape, including the shotcalling round, and how the harder-structure rule is tested (Stage 2).
 4. ~~Season format of each league (Stage 3).~~ Done as v0.1 on 2026-10-11 (see "Match simulation"): single round robin, one table, no playoffs.
-5. Exact minimum length of an answer in each long scene (Stage 4).
+5. ~~Exact minimum length of an answer in each long scene (Stage 4).~~ Done as v0.1 on 2026-10-11 (see "Scoring", rule 1 and "Version 1 scene rules").
 6. Whether the Hint button should cost score after version 1 (decide at the two-week review).
 
 ## Suggested project instructions
